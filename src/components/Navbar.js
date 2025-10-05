@@ -8,6 +8,7 @@ return (
 <div className='space-x-4'>
 <Link to='/'>Home</Link>
 <Link to='/strains'>Strains</Link>
+		<Link to='/admin'>Admin</Link>
 <Link to='/journal'>Journal</Link>
 <Link to='/profile'>Profile</Link>
 <Link to='/login'>Login</Link>
