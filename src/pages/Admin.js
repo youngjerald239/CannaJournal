@@ -4,9 +4,6 @@ export default function Admin() {
   const [strains, setStrains] = useState([]);
   const [loading, setLoading] = useState(false);
   const [newStrainName, setNewStrainName] = useState('');
-    // Removed mappings state as backend no longer supports mappings
-    const [mapFrom, setMapFrom] = useState('');
-    const [mapTo, setMapTo] = useState('');
 
   async function loadAll() {
     setLoading(true);
@@ -36,17 +33,12 @@ export default function Admin() {
     } catch (e) {}
   }
 
-  async function addMapping() {
-    // Removed addMapping function as mappings are no longer needed
-  }
-
-  async function deleteMapping(from) {
-    // Removed deleteMapping function as mappings are no longer needed
-  }
+  // mappings removed — no-op placeholders intentionally removed to avoid unused warnings
 
   return (
     <div className='p-4'>
-      <h1 className='font-bold text-xl mb-2'>Admin</h1>
+      <div className='max-w-4xl mx-auto px-4'>
+        <h1 className='font-bold text-xl mb-2'>Admin</h1>
       {loading && <p>Loading…</p>}
 
       <section className='mb-6'>
@@ -71,7 +63,7 @@ export default function Admin() {
           ))}
         </ul>
       </section>
-      
+      </div>
     </div>
   );
 }

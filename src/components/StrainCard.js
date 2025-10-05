@@ -1,5 +1,5 @@
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function StrainCard({ strain }) {
 	const [view, setView] = useState('consumer');
@@ -7,9 +7,28 @@ export default function StrainCard({ strain }) {
 	const [activeButton, setActiveButton] = useState(null);
 	const list = (v) => (Array.isArray(v) ? v.join(', ') : v ?? '—');
 
+	// respect user reduced-motion setting
+	const [reduceMotion, setReduceMotion] = useState(false);
+	useEffect(() => {
+		try {
+			const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+			setReduceMotion(mq.matches);
+			function onChange() { setReduceMotion(mq.matches); }
+			mq.addEventListener?.('change', onChange);
+			return () => mq.removeEventListener?.('change', onChange);
+		} catch (e) {
+			// ignore
+		}
+	}, []);
+
 	function handleSwitchView(v) {
-		// small animated feedback: highlight and scale the card, then switch content
 		setActiveButton(v);
+		if (reduceMotion) {
+			setView(v);
+			setActiveButton(null);
+			return;
+		}
+		// small animated feedback: highlight and scale the card, then switch content
 		setAnimating(true);
 		setTimeout(() => {
 			setView(v);
@@ -25,11 +44,11 @@ export default function StrainCard({ strain }) {
 		: [];
 
 	return (
-			<div className={`bg-gradient-to-b from-black/60 to-black/30 p-4 rounded-xl shadow-lg text-gray-100 w-full border border-black/40 transform transition-all duration-250 ${animating ? 'scale-105 ring-2 ring-green-400/30 shadow-2xl' : ''}`}>
+			<div className={`bg-gradient-to-b from-black/60 to-black/30 p-4 rounded-xl shadow-lg text-gray-100 w-full border border-black/40 transform transition-all duration-250 flex flex-col ${animating ? 'scale-105 ring-2 ring-green-400/30 shadow-2xl' : ''}`}>
 				<img
 					src={strain.image ?? 'https://upload.wikimedia.org/wikipedia/commons/1/19/Cannabis_sativa_female_flower_closeup.jpg'}
 					alt={strain.name}
-					className='w-full h-40 object-cover rounded-lg mb-3'
+					className='w-full h-40 sm:h-36 md:h-44 lg:h-48 object-cover rounded-lg mb-3'
 					onError={(e) => {
 						// show a generic fallback and avoid infinite loop
 						e.target.onerror = null;
@@ -59,22 +78,28 @@ export default function StrainCard({ strain }) {
 				</div>
 			</div>
 
-			<div className='mt-4 flex gap-3'>
+			<div className='mt-4 flex gap-3' role='tablist' aria-label={`${strain.name} view toggle`}> 
 				<button
+					role='tab'
+					aria-selected={view === 'consumer'}
+					aria-controls={`consumer-${strain.id}`}
 					onClick={() => handleSwitchView('consumer')}
 					className={`text-sm px-3 py-1 rounded-full transition transform duration-150 ${view === 'consumer' ? 'bg-green-600 text-white shadow-md' : 'bg-gray-800/50 text-gray-200'} ${activeButton === 'consumer' ? 'scale-95 animate-pulse' : ''}`}>
 					Consumer
-				</button>
-				<button
+					</button>
+					<button
+					role='tab'
+					aria-selected={view === 'grower'}
+					aria-controls={`grower-${strain.id}`}
 					onClick={() => handleSwitchView('grower')}
 					className={`text-sm px-3 py-1 rounded-full transition transform duration-150 ${view === 'grower' ? 'bg-green-600 text-white shadow-md' : 'bg-gray-800/50 text-gray-200'} ${activeButton === 'grower' ? 'scale-95 animate-pulse' : ''}`}>
 					Grower
-				</button>
-			</div>
+					</button>
+				</div>
 
 					{/* content area: crossfade when switching views */}
 					{view === 'consumer' ? (
-						<div className={`mt-3 text-sm space-y-1 transition-all duration-200 ${animating ? 'opacity-30 -translate-y-2' : 'opacity-100 translate-y-0'}`}>
+						<div id={`consumer-${strain.id}`} tabIndex='0' role='tabpanel' aria-hidden={view !== 'consumer'} className={`mt-3 text-sm space-y-1 ${reduceMotion ? '' : 'transition-all duration-200'} ${animating ? 'opacity-30 -translate-y-2' : 'opacity-100 translate-y-0'}`} style={{flex: 1}}>
 							{strain.description && (
 								<p className='text-gray-400 mb-2'>
 									{strain.description.length > 200 ? strain.description.slice(0, 200) + '…' : strain.description}
@@ -86,7 +111,7 @@ export default function StrainCard({ strain }) {
 							<p><strong>Recommended use:</strong> {strain.recommendedUse ?? '—'}</p>
 						</div>
 					) : (
-					<div className={`mt-3 pt-2 border-t text-sm transition-all duration-200 ${animating ? 'opacity-30 -translate-y-2' : 'opacity-100 translate-y-0'}`}>
+					<div id={`grower-${strain.id}`} tabIndex='0' role='tabpanel' aria-hidden={view !== 'grower'} className={`mt-3 pt-2 border-t text-sm ${reduceMotion ? '' : 'transition-all duration-200'} ${animating ? 'opacity-30 -translate-y-2' : 'opacity-100 translate-y-0'}`} style={{flex: 1}}>
 					<h3 className='font-bold'>Grower info</h3>
 					<p><strong>Difficulty:</strong> {strain.grow?.difficulty ?? 'Medium'}</p>
 					<p><strong>Flowering time:</strong> {strain.grow?.floweringTime ?? '—'}</p>

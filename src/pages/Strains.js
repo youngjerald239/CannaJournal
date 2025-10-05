@@ -72,17 +72,19 @@ export default function Strains() {
 			};
 		}, []);
 
-	return (
-		<div className='p-4'>
+    return (
+        <div className='p-4'>
+            <div className='max-w-6xl mx-auto px-4'>
 			<div className='mb-4'>
 				<button onClick={() => { setLoading(true); fetch('http://localhost:5002/strains').then(r=>r.json()).then(d=>{setStrains(d);setLoading(false)}).catch(()=>setLoading(false)) }} className='px-2 py-1 bg-blue-600 text-white rounded'>Refresh strains</button>
 			</div>
 			{loading && <p className='mb-4'>Fetching strain summaries…</p>}
-			<div className='grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4'>
+                <div className='grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4'>
 				{strains.map((strain) => (
 					<StrainCard key={strain.id} strain={strain} />
 				))}
 			</div>
+            </div>
 		</div>
 	);
 }
