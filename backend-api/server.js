@@ -1,3 +1,6 @@
+require('dotenv').config();
+// Environment validation (will exit process if critical vars are weak/missing)
+try { require('./scripts/check-env'); } catch (e) { console.error('Env validation failed:', e.message); process.exit(1); }
 const express = require('express');
 const cors = require('cors');
 

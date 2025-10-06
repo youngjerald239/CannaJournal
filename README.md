@@ -45,6 +45,49 @@ You can learn more in the [Create React App documentation](https://facebook.gith
 
 To learn React, check out the [React documentation](https://reactjs.org/).
 
+## Backend Environment & Secrets
+
+The backend (`backend-api/`) now uses `dotenv`.
+
+1. Copy `backend-api/.env.example` to `backend-api/.env` and fill in values.
+2. Never commit the real `.env` (it's ignored by `.gitignore`).
+3. Rotate any leaked secrets immediately.
+
+### Example
+```
+PORT=5002
+JWT_SECRET=GENERATE_A_LONG_RANDOM_STRING
+ADMIN_USER=admin
+ADMIN_PASS=CHANGE_ME
+JOURNAL_TOKEN=CHANGE_ME
+APP_URL=http://localhost:3001
+SERVER_BASE=http://localhost:5002
+```
+
+## Secret Scanning
+
+Automated scans run via GitHub Actions workflow: `.github/workflows/secret-scan.yml` using Gitleaks.
+
+Local pre-commit hook (optional):
+```
+cd backend-api
+bash scripts/add-gitleaks-hook.sh
+```
+Install gitleaks first (see https://github.com/gitleaks/gitleaks#installation).
+
+If a commit is blocked, review and remove/rotate the exposed value.
+
+## Uploads
+
+User avatar images are stored in `backend-api/uploads/` (git-ignored) and served at `/uploads/<file>`.
+
+## Hardening Suggestions
+
+- Enforce non-default `JWT_SECRET` on startup.
+- Add rate limiting to avatar upload.
+- Implement DELETE `/profile/avatar` when needed.
+
+
 ### Code Splitting
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)

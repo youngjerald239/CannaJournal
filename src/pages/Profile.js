@@ -172,7 +172,7 @@ export default function Profile() {
 				<div className="bg-gradient-to-br from-emerald-900/40 via-emerald-800/30 to-emerald-700/30 rounded-2xl p-6 sm:p-8 border border-emerald-500/20 shadow-xl backdrop-blur">
 					<div className="flex flex-col sm:flex-row gap-8">
 						<div className="flex flex-col items-center gap-3">
-							<div className="relative group">
+							<div className="relative group" onDrop={onDrop} onDragOver={onDragOver}>
 								<div className="w-32 h-32 rounded-full overflow-hidden ring-2 ring-emerald-400/60 ring-offset-2 ring-offset-black bg-emerald-950/60 flex items-center justify-center text-4xl font-bold text-emerald-200 select-none">
 									{avatar ? <img src={avatar} alt="Avatar" className="w-full h-full object-cover" /> : initial}
 								</div>

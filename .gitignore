@@ -11,6 +11,13 @@
 # production
 /build
 
+# environment
+.env
+.env.*.local
+
+# uploads (user avatars stored server-side)
+backend-api/uploads
+
 # misc
 .DS_Store
 .env.local
