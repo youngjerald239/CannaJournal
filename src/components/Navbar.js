@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useEffect, useState } from 'react';
+import { useAuth } from '../lib/auth';
 
 export default function Navbar() {
 	const [open, setOpen] = useState(false);
@@ -35,15 +36,26 @@ export default function Navbar() {
 					</button>
 				</div>
 
-				<div id={menuId} className={`mt-3 md:mt-0 md:flex md:items-center md:gap-3 ${open ? 'block' : 'hidden'}`}>
-								<Link to='/' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Home</Link>
-								<Link to='/strains' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Strains</Link>
-								<Link to='/admin' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Admin</Link>
-								<Link to='/journal' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Journal</Link>
-								<Link to='/profile' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Profile</Link>
-								<Link to='/login' className='block md:inline-block px-2 py-1 rounded bg-white/5 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-green-300/30'>Login</Link>
-				</div>
+								<AuthStatus open={open} menuId={menuId} />
 			</div>
 		</nav>
+	);
+}
+
+function AuthStatus({ open, menuId }) {
+  const { isAuthenticated, logout } = useAuth();
+	return (
+			<div id={menuId} className={`mt-3 md:mt-0 md:flex md:items-center md:gap-3 ${open ? 'block' : 'hidden'}`}>
+			<Link to='/' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Home</Link>
+			<Link to='/strains' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Strains</Link>
+				{isAuthenticated && <Link to='/admin' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Admin</Link>}
+			<Link to='/journal' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Journal</Link>
+			<Link to='/profile' className='block md:inline-block px-2 py-1 rounded hover:underline focus:outline-none focus:ring-2 focus:ring-green-300/30'>Profile</Link>
+			{isAuthenticated ? (
+				<button onClick={() => logout()} className='block md:inline-flex px-2 py-1 rounded bg-red-700/20 text-sm'>Logout</button>
+			) : (
+				<Link to='/login' className='block md:inline-block px-2 py-1 rounded bg-white/5 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-green-300/30'>Login</Link>
+			)}
+		</div>
 	);
 }

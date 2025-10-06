@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef } from 'react';
 
-const STORAGE_KEY = 'cannajournal.entries';
+import { useEffect, useState, useRef } from 'react';
+import { getAllEntries, putEntries, deleteEntry as dbDeleteEntry } from '../lib/db';
 
 export default function Journal() {
 	const [strains, setStrains] = useState([]);
@@ -39,18 +39,18 @@ export default function Journal() {
 		return () => { cancelled = true; };
 	}, []);
 
-	useEffect(() => {
-		const raw = localStorage.getItem(STORAGE_KEY);
-		try {
-			setEntries(raw ? JSON.parse(raw) : []);
-		} catch (e) {
-			setEntries([]);
-		}
-	}, []);
-
-	useEffect(() => {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-	}, [entries]);
+		useEffect(() => {
+			let mounted = true;
+			(async () => {
+				try {
+					const all = await getAllEntries();
+					if (mounted) setEntries(all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id)));
+				} catch (e) {
+					setEntries([]);
+				}
+			})();
+			return () => { mounted = false; };
+		}, []);
 
 	function addEffectTag() {
 		const txt = effectsInput.trim();
@@ -128,14 +128,121 @@ export default function Journal() {
 		const timestamp = new Date().toISOString();
 		const strainName = strains.find((s) => String(s.id) === String(strainId))?.name || (strainId ? strainId : 'Unknown');
 		const entry = { id: timestamp, timestamp, strainId, strainName, effects, mood, rating, notes, photoDataUrl };
-		setEntries((e) => [entry, ...e]);
-		clearForm();
+			(async () => {
+				await putEntries([entry]);
+				const all = await getAllEntries();
+				setEntries(all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id)));
+			})();
+			clearForm();
 	}
 
 	function deleteEntry(id) {
-		if (!window.confirm('Delete this entry?')) return;
-		setEntries((e) => e.filter((x) => x.id !== id));
+			if (!window.confirm('Delete this entry?')) return;
+			(async () => {
+				await dbDeleteEntry(id);
+				const all = await getAllEntries();
+				setEntries(all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id)));
+			})();
 	}
+
+
+
+	// export/import helpers (component scope)
+	function downloadFile(filename, content, mime = 'application/json') {
+		const blob = new Blob([content], { type: mime });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = filename;
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		URL.revokeObjectURL(url);
+	}
+
+	function exportJSON() {
+		(async () => {
+			const all = await getAllEntries();
+			const content = JSON.stringify(all, null, 2);
+			downloadFile('cannajournal-entries.json', content, 'application/json');
+		})();
+	}
+
+	function exportCSV() {
+		// simple CSV without photoDataUrl to keep sizes reasonable
+		const header = ['id', 'timestamp', 'strainId', 'strainName', 'effects', 'mood', 'rating', 'notes'];
+		(async () => {
+			const all = await getAllEntries();
+			const rows = all.map((e) => [
+				e.id,
+				e.timestamp,
+				e.strainId,
+				e.strainName,
+				'"' + (Array.isArray(e.effects) ? e.effects.join(';') : '') + '"',
+				e.mood,
+				e.rating,
+				'"' + String(e.notes || '').replace(/"/g, '""') + '"',
+			].join(','));
+			const csv = [header.join(','), ...rows].join('\n');
+			downloadFile('cannajournal-entries.csv', csv, 'text/csv');
+		})();
+	}
+
+	function handleImportFile(e) {
+		const f = e.target.files?.[0];
+		if (!f) return;
+		const reader = new FileReader();
+		reader.onload = () => {
+			const txt = String(reader.result || '');
+			try {
+				if (f.name.endsWith('.json')) {
+					const data = JSON.parse(txt);
+					if (Array.isArray(data)) {
+						mergeImported(data);
+					}
+				} else if (f.name.endsWith('.csv')) {
+					const lines = txt.split(/\r?\n/).filter(Boolean);
+					const rest = lines.slice(1);
+					const entries = rest.map((ln) => {
+						const cols = ln.split(',');
+						return {
+							id: cols[0],
+							timestamp: cols[1],
+							strainId: cols[2],
+							strainName: cols[3],
+							effects: cols[4] ? cols[4].replace(/"/g, '').split(';') : [],
+							mood: cols[5],
+							rating: Number(cols[6] || 0),
+							notes: cols[7] ? cols[7].replace(/"/g, '') : '',
+						};
+					});
+					mergeImported(entries);
+				}
+			} catch (err) {
+				alert('Import failed: ' + err.message);
+			}
+		};
+		reader.readAsText(f);
+	}
+
+	function mergeImported(newEntries) {
+		try {
+			(async () => {
+				const existing = await getAllEntries();
+				const map = new Map(existing.map((e) => [e.id, e]));
+				for (const ne of newEntries) map.set(ne.id, ne);
+				const merged = Array.from(map.values()).sort((a, b) => (b.timestamp || b.id).localeCompare(a.timestamp || a.id));
+				await putEntries(merged);
+				// refresh UI by reloading entries
+				const all = await getAllEntries();
+				setEntries(all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id)));
+			})();
+		} catch (err) {
+			alert('Failed to merge imported entries: ' + err.message);
+		}
+	}
+
+	// Server sync removed: syncToServer and fetchFromServer are intentionally not present here.
 
 	return (
 		<div className='p-4'>
@@ -214,17 +321,19 @@ export default function Journal() {
 					</div>
 				</section>
 
+
+
 						<section>
 							<div className='flex items-center justify-between'>
 								<h2 className='font-semibold mb-2'>Entries</h2>
 								<div className='flex gap-2 items-center'>
-									<button onClick={() => exportJSON(entries)} className='px-3 py-1 bg-blue-600 text-white rounded text-sm'>Export JSON</button>
-									<button onClick={() => exportCSV(entries)} className='px-3 py-1 bg-blue-600 text-white rounded text-sm'>Export CSV</button>
-									<label className='text-sm px-2 py-1 rounded bg-gray-700 cursor-pointer'>
-										Import
-										<input type='file' accept='.json,.csv' onChange={handleImportFile} className='hidden' />
-									</label>
-								</div>
+											<button onClick={() => exportJSON()} className='px-3 py-1 bg-blue-600 text-white rounded text-sm'>Export JSON</button>
+											<button onClick={() => exportCSV()} className='px-3 py-1 bg-blue-600 text-white rounded text-sm'>Export CSV</button>
+											<label className='text-sm px-2 py-1 rounded bg-gray-700 cursor-pointer'>
+												Import
+												<input type='file' accept='.json,.csv' onChange={handleImportFile} className='hidden' />
+											</label>
+										</div>
 							</div>
 					{entries.length === 0 ? (
 						<p className='text-sm text-green-100/60'>No entries yet — create your first one above.</p>
@@ -260,90 +369,4 @@ export default function Journal() {
 	);
 }
 
-		// export helpers
-		function downloadFile(filename, content, mime = 'application/json') {
-			const blob = new Blob([content], { type: mime });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = filename;
-			document.body.appendChild(a);
-			a.click();
-			a.remove();
-			URL.revokeObjectURL(url);
-		}
-
-		function exportJSON(entries) {
-			const content = JSON.stringify(entries, null, 2);
-			downloadFile('cannajournal-entries.json', content, 'application/json');
-		}
-
-		function exportCSV(entries) {
-			// simple CSV without photoDataUrl to keep sizes reasonable
-			const header = ['id', 'timestamp', 'strainId', 'strainName', 'effects', 'mood', 'rating', 'notes'];
-			const rows = entries.map((e) => [
-				e.id,
-				e.timestamp,
-				e.strainId,
-				e.strainName,
-				'"' + (Array.isArray(e.effects) ? e.effects.join(';') : '') + '"',
-				e.mood,
-				e.rating,
-				'"' + String(e.notes || '').replace(/"/g, '""') + '"',
-			].join(','));
-			const csv = [header.join(','), ...rows].join('\n');
-			downloadFile('cannajournal-entries.csv', csv, 'text/csv');
-		}
-
-		function handleImportFile(e) {
-			const f = e.target.files?.[0];
-			if (!f) return;
-			const reader = new FileReader();
-			reader.onload = () => {
-				const txt = String(reader.result || '');
-				try {
-					if (f.name.endsWith('.json')) {
-						const data = JSON.parse(txt);
-						if (Array.isArray(data)) {
-							mergeImported(data);
-						}
-					} else if (f.name.endsWith('.csv')) {
-						const lines = txt.split(/\r?\n/).filter(Boolean);
-						const rest = lines.slice(1);
-						const entries = rest.map((ln) => {
-							const cols = ln.split(',');
-							return {
-								id: cols[0],
-								timestamp: cols[1],
-								strainId: cols[2],
-								strainName: cols[3],
-								effects: cols[4] ? cols[4].replace(/"/g, '').split(';') : [],
-								mood: cols[5],
-								rating: Number(cols[6] || 0),
-								notes: cols[7] ? cols[7].replace(/"/g, '') : '',
-							};
-						});
-						mergeImported(entries);
-					}
-				} catch (err) {
-					alert('Import failed: ' + err.message);
-				}
-			};
-			reader.readAsText(f);
-		}
-
-		function mergeImported(newEntries) {
-			try {
-				const raw = localStorage.getItem(STORAGE_KEY);
-				const existing = raw ? JSON.parse(raw) : [];
-				// prepend new entries (avoid duplicate ids)
-				const map = new Map(existing.map((e) => [e.id, e]));
-				for (const ne of newEntries) map.set(ne.id, ne);
-				const merged = Array.from(map.values()).sort((a, b) => (b.timestamp || b.id).localeCompare(a.timestamp || a.id));
-				localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-				// trigger reload: simple approach, reload page to sync state
-				window.location.reload();
-			} catch (err) {
-				alert('Failed to merge imported entries: ' + err.message);
-			}
-		}
+// export helpers moved to component scope to access state

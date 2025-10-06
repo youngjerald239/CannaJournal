@@ -8,20 +8,30 @@ import Journal from './pages/Journal';
 import Strains from './pages/Strains';
 import Admin from './pages/Admin';
 import './App.css';
+import { AuthProvider } from './lib/auth';
+import { useAuth } from './lib/auth';
+import { Navigate } from 'react-router-dom';
 
 
 function App() {
+	function RequireAuth({ children }) {
+		const { isAuthenticated, checking } = useAuth();
+		if (checking) return null; // or a spinner
+		return isAuthenticated ? children : <Navigate to='/login' />;
+	}
 return (
 <Router>
+<AuthProvider>
 <Navbar />
 <Routes>
 <Route path='/' element={<Home />} />
 <Route path='/login' element={<Login />} />
-<Route path='/profile' element={<Profile />} />
-<Route path='/journal' element={<Journal />} />
+<Route path='/profile' element={<RequireAuth><Profile /></RequireAuth>} />
+<Route path='/journal' element={<RequireAuth><Journal /></RequireAuth>} />
 <Route path='/strains' element={<Strains />} />
-		<Route path='/admin' element={<Admin />} />
+				<Route path='/admin' element={<RequireAuth><Admin /></RequireAuth>} />
 </Routes>
+</AuthProvider>
 </Router>
 );
 }
