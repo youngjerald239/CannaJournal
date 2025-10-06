@@ -27,7 +27,7 @@ export default function Strains() {
 					const controller = new AbortController();
 					// allow a slightly longer timeout for local dev
 					const timeout = setTimeout(() => controller.abort(), 5000);
-						const res = await fetch('http://localhost:5002/strains', { signal: controller.signal });
+						const res = await fetch('/strains', { signal: controller.signal, credentials: 'include' });
 						clearTimeout(timeout);
 						if (res.ok) {
 							const data = await res.json();
@@ -76,7 +76,7 @@ export default function Strains() {
         <div className='p-4'>
             <div className='max-w-6xl mx-auto px-4'>
 			<div className='mb-4'>
-				<button onClick={() => { setLoading(true); fetch('http://localhost:5002/strains').then(r=>r.json()).then(d=>{setStrains(d);setLoading(false)}).catch(()=>setLoading(false)) }} className='px-2 py-1 bg-blue-600 text-white rounded'>Refresh strains</button>
+				<button onClick={() => { setLoading(true); fetch('/strains', { credentials: 'include'}).then(r=> r.ok ? r.json(): []).then(d=>{ setStrains(Array.isArray(d)?d:[]); setLoading(false); }).catch(()=>setLoading(false)); }} className='px-2 py-1 bg-blue-600 text-white rounded'>Refresh strains</button>
 			</div>
 			{loading && <p className='mb-4'>Fetching strain summaries…</p>}
                 <div className='grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4'>

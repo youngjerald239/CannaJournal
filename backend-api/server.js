@@ -7,11 +7,54 @@ const path = require('path');
 const cookie = require('cookie');
 const crypto = require('crypto');
 const app = express();
-app.use(cors({ origin: process.env.APP_URL || 'http://localhost:3001', credentials: true }));
+// Simplified permissive CORS for local development (echo request origin if present)
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
-// simple in-memory state store for OAuth 'state' validation
+// simple in-memory state store for OAuth 'state' validation (with expiry)
 const oauthStates = new Map(); // state -> { action, provider, created }
+const OAUTH_STATE_TTL = 1000 * 60 * 5; // 5 minutes
+
+// sessions store: sid -> { username, role, expires }
+const sessions = new Map();
+const SESSION_TTL = 1000 * 60 * 60 * 24 * 7; // 7 days
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret';
+
+function cleanupStores() {
+  const now = Date.now();
+  for (const [s, v] of oauthStates) if (now - v.created > OAUTH_STATE_TTL) oauthStates.delete(s);
+  for (const [sid, v] of sessions) if (v.expires < now) sessions.delete(sid);
+}
+setInterval(cleanupStores, 1000 * 60);
+
+function base64url(input) {
+  return Buffer.from(input).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+function signJWT(payload, secret, expiresInSec = SESSION_TTL / 1000) {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const exp = Math.floor(Date.now() / 1000) + Math.floor(expiresInSec);
+  const pl = Object.assign({}, payload, { exp });
+  const s = base64url(JSON.stringify(header)) + '.' + base64url(JSON.stringify(pl));
+  const sig = crypto.createHmac('sha256', secret).update(s).digest('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+  return s + '.' + sig;
+}
+
+function verifyJWT(token, secret) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [h, p, sig] = parts;
+    const data = h + '.' + p;
+    const expected = crypto.createHmac('sha256', secret).update(data).digest('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+    if (expected !== sig) return null;
+    const payload = JSON.parse(Buffer.from(p, 'base64').toString('utf8'));
+    if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
 
 const DATA_DIR = path.join(__dirname, 'data');
 const STRAINS_FILE = path.join(DATA_DIR, 'strains.json');
@@ -41,6 +84,14 @@ function saveJson(file, data) {
 let strains = loadJson(STRAINS_FILE, []);
 let journalEntries = loadJson(JOURNAL_FILE, []);
 let users = loadJson(USERS_FILE, []);
+
+// Ensure user objects can hold profile information: displayName, bio, avatarFile (filename under uploads)
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR); } catch (e) { console.error('Could not create uploads dir', e.message); }
+
+function findUser(username) {
+  return users.find(u => u.username === username);
+}
 
 app.get('/strains', (req, res) => {
   res.json(strains);
@@ -79,12 +130,12 @@ app.get('/search', (req, res) => {
 
 // Hardened auth: require Authorization header with exact token configured by JOURNAL_TOKEN
 const JOURNAL_TOKEN = process.env.JOURNAL_TOKEN || 'dev-token';
-function parseCookieToken(req) {
+function parseSessionCookie(req) {
   const header = req.headers.cookie || '';
   if (!header) return null;
   try {
     const c = cookie.parse(header || '');
-    return c['journal_token'] || null;
+    return c['session'] || null;
   } catch (e) {
     return null;
   }
@@ -94,9 +145,24 @@ function requireAuth(req, res, next) {
   const auth = req.headers.authorization || '';
   let token = null;
   if (auth && auth.startsWith('Bearer ')) token = auth.slice('Bearer '.length).trim();
-  if (!token) token = parseCookieToken(req);
-  if (!token || token !== JOURNAL_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+  if (!token) token = parseSessionCookie(req);
+  if (!token) return res.status(401).json({ error: 'Unauthorized' });
+  const payload = verifyJWT(token, JWT_SECRET);
+  if (!payload) return res.status(401).json({ error: 'Unauthorized' });
+  const sid = payload.sid;
+  const sess = sessions.get(sid);
+  if (!sess || sess.expires < Date.now()) return res.status(401).json({ error: 'Unauthorized' });
+  // attach user
+  req.user = { username: sess.username, role: sess.role };
   next();
+}
+
+function requireRole(role) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    if (req.user.role !== role) return res.status(403).json({ error: 'Forbidden' });
+    next();
+  };
 }
 
 // Simple username/password auth endpoint. Returns the journal token when credentials match env vars.
@@ -106,7 +172,16 @@ app.post('/auth', (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username and password required' });
   // admin backdoor
-  if (username === ADMIN_USER && password === ADMIN_PASS) return res.json({ token: JOURNAL_TOKEN });
+  if (username === ADMIN_USER && password === ADMIN_PASS) {
+    // create session for admin
+    const sid = crypto.randomBytes(12).toString('hex');
+    const role = 'admin';
+    const expires = Date.now() + SESSION_TTL;
+    sessions.set(sid, { username: ADMIN_USER, role, expires });
+    const jwt = signJWT({ sid, username: ADMIN_USER, role }, JWT_SECRET);
+    res.setHeader('Set-Cookie', cookie.serialize('session', jwt, { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: SESSION_TTL / 1000 }));
+    return res.json({ user: { username: ADMIN_USER, role } });
+  }
   // check users.json
   const u = users.find((x) => x.username === username);
   if (!u) return res.status(401).json({ error: 'Invalid credentials' });
@@ -114,9 +189,19 @@ app.post('/auth', (req, res) => {
   try {
     const crypto = require('crypto');
     const hash = crypto.pbkdf2Sync(String(password), Buffer.from(u.salt, 'hex'), 100000, 64, 'sha512').toString('hex');
-    if (hash === u.hash) return res.json({ token: JOURNAL_TOKEN });
+    if (hash === u.hash) {
+      // create normal user session cookie (role default 'user' unless stored)
+      const sid = crypto.randomBytes(12).toString('hex');
+      const role = u.role || 'user';
+      const expires = Date.now() + SESSION_TTL;
+      sessions.set(sid, { username: u.username, role, expires });
+      const jwt = signJWT({ sid, username: u.username, role }, JWT_SECRET);
+      res.setHeader('Set-Cookie', cookie.serialize('session', jwt, { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: SESSION_TTL / 1000 }));
+      return res.json({ user: { username: u.username, role } });
+    }
     return res.status(401).json({ error: 'Invalid credentials' });
   } catch (err) {
+    console.error('Auth error (signin)', err);
     return res.status(500).json({ error: 'Auth failure' });
   }
 });
@@ -130,11 +215,19 @@ app.post('/auth/signup', (req, res) => {
     const crypto = require('crypto');
     const salt = crypto.randomBytes(16);
     const hash = crypto.pbkdf2Sync(String(password), salt, 100000, 64, 'sha512').toString('hex');
-    const rec = { username, salt: salt.toString('hex'), hash };
+    const rec = { username, salt: salt.toString('hex'), hash, displayName: username, bio: '', avatarFile: null };
     users.push(rec);
     try { saveJson(USERS_FILE, users); } catch (e) { /* ignore */ }
-    return res.json({ token: JOURNAL_TOKEN });
+    // create session
+    const sid = crypto.randomBytes(12).toString('hex');
+    const role = 'user';
+    const expires = Date.now() + SESSION_TTL;
+    sessions.set(sid, { username, role, expires });
+    const jwt = signJWT({ sid, username, role }, JWT_SECRET);
+    res.setHeader('Set-Cookie', cookie.serialize('session', jwt, { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: SESSION_TTL / 1000 }));
+    return res.json({ user: { username, role } });
   } catch (err) {
+    console.error('Auth error (signup)', err);
     return res.status(500).json({ error: 'Signup failed' });
   }
 });
@@ -142,6 +235,13 @@ app.post('/auth/signup', (req, res) => {
 // OAuth helpers and routes (Google + LinkedIn)
 const APP_URL = process.env.APP_URL || 'http://localhost:3001';
 const SERVER_BASE = process.env.SERVER_BASE || `http://localhost:${process.env.PORT || 5002}`;
+
+// Providers discovery: let frontend know which buttons to show
+app.get('/auth/providers', (req, res) => {
+  const google = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+  const linkedin = Boolean(process.env.LINKEDIN_CLIENT_ID && process.env.LINKEDIN_CLIENT_SECRET);
+  res.json({ google, linkedin });
+});
 
 function jsonOrRedirect(req, res, url) {
   // If client expects JSON, return {url}, otherwise redirect
@@ -239,13 +339,18 @@ app.get('/auth/google/callback', async (req, res) => {
     let u = users.find((x) => x.username === email);
     if (!u && stateRec.action === 'signup') {
       // create simple user record without password
-      u = { username: email, oauth: true, provider: 'google' };
+      u = { username: email, oauth: true, provider: 'google', role: 'user' };
       users.push(u);
       saveJson(USERS_FILE, users);
     }
     if (!u && stateRec.action === 'signin') return res.status(403).send('User not found');
-    // set httpOnly cookie
-    res.setHeader('Set-Cookie', cookie.serialize('journal_token', String(JOURNAL_TOKEN), { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: 60 * 60 * 24 * 7 }));
+    // create session and JWT cookie
+    const sid = crypto.randomBytes(12).toString('hex');
+    const role = u.role || 'user';
+    const expires = Date.now() + SESSION_TTL;
+    sessions.set(sid, { username: u.username, role, expires });
+    const jwt = signJWT({ sid, username: u.username, role }, JWT_SECRET);
+    res.setHeader('Set-Cookie', cookie.serialize('session', jwt, { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: SESSION_TTL / 1000 }));
     return res.redirect(`${APP_URL}/journal`);
   } catch (err) {
     console.error('Google callback error', err);
@@ -276,12 +381,17 @@ app.get('/auth/linkedin/callback', async (req, res) => {
     if (!email) return res.status(400).send('No email');
     let u = users.find((x) => x.username === email);
     if (!u && stateRec.action === 'signup') {
-      u = { username: email, oauth: true, provider: 'linkedin' };
+      u = { username: email, oauth: true, provider: 'linkedin', role: 'user' };
       users.push(u);
       saveJson(USERS_FILE, users);
     }
     if (!u && stateRec.action === 'signin') return res.status(403).send('User not found');
-    res.setHeader('Set-Cookie', cookie.serialize('journal_token', String(JOURNAL_TOKEN), { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: 60 * 60 * 24 * 7 }));
+    const sid = crypto.randomBytes(12).toString('hex');
+    const role = u.role || 'user';
+    const expires = Date.now() + SESSION_TTL;
+    sessions.set(sid, { username: u.username, role, expires });
+    const jwt = signJWT({ sid, username: u.username, role }, JWT_SECRET);
+    res.setHeader('Set-Cookie', cookie.serialize('session', jwt, { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: SESSION_TTL / 1000 }));
     return res.redirect(`${APP_URL}/journal`);
   } catch (err) {
     console.error('LinkedIn callback error', err);
@@ -291,24 +401,32 @@ app.get('/auth/linkedin/callback', async (req, res) => {
 
 // Auth status and logout
 app.get('/auth/me', (req, res) => {
-  const token = parseCookieToken(req);
-  if (!token || token !== JOURNAL_TOKEN) return res.status(401).json({ authenticated: false });
-  return res.json({ authenticated: true });
+  // Read session cookie and validate JWT + in-memory session
+  const token = parseSessionCookie(req);
+  if (!token) return res.status(401).json({ authenticated: false });
+  const payload = verifyJWT(token, JWT_SECRET);
+  if (!payload) return res.status(401).json({ authenticated: false });
+  const sid = payload.sid;
+  const sess = sessions.get(sid);
+  if (!sess || sess.expires < Date.now()) return res.status(401).json({ authenticated: false });
+  const u = findUser(sess.username) || { displayName: sess.username, bio: '', avatarFile: null };
+  return res.json({ authenticated: true, user: { username: sess.username, role: sess.role, displayName: u.displayName || sess.username, bio: u.bio || '', avatar: u.avatarFile ? `/uploads/${u.avatarFile}` : null } });
 });
 
 app.post('/auth/logout', (req, res) => {
-  res.setHeader('Set-Cookie', cookie.serialize('journal_token', '', { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: 0 }));
+  // Clear the session cookie
+  res.setHeader('Set-Cookie', cookie.serialize('session', '', { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: 0 }));
   return res.json({ ok: true });
 });
 
 // Admin-only: list users (do not expose hashes)
-app.get('/users', requireAuth, (req, res) => {
+app.get('/users', requireAuth, requireRole('admin'), (req, res) => {
   const list = users.map((u) => ({ username: u.username, oauth: u.oauth || false, provider: u.provider || null }));
   res.json(list);
 });
 
 // Admin-only: delete user
-app.delete('/auth/users/:username', requireAuth, (req, res) => {
+app.delete('/auth/users/:username', requireAuth, requireRole('admin'), (req, res) => {
   const username = String(req.params.username || '');
   const idx = users.findIndex((u) => u.username === username);
   if (idx === -1) return res.status(404).json({ error: 'Not found' });
@@ -317,9 +435,58 @@ app.delete('/auth/users/:username', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Profile endpoints
+app.get('/profile', requireAuth, (req, res) => {
+  const u = findUser(req.user.username);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  res.json({ username: u.username, displayName: u.displayName || u.username, bio: u.bio || '', avatar: u.avatarFile ? `/uploads/${u.avatarFile}` : null });
+});
+
+app.put('/profile', requireAuth, (req, res) => {
+  const { displayName, bio } = req.body || {};
+  const u = findUser(req.user.username);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  if (typeof displayName === 'string' && displayName.trim()) u.displayName = displayName.trim().slice(0, 60);
+  if (typeof bio === 'string') u.bio = bio.slice(0, 500);
+  try { saveJson(USERS_FILE, users); } catch (e) {}
+  res.json({ ok: true, profile: { username: u.username, displayName: u.displayName, bio: u.bio, avatar: u.avatarFile ? `/uploads/${u.avatarFile}` : null } });
+});
+
+// Basic avatar upload (base64 or multipart). We'll accept JSON { dataUrl: "data:image/..." }
+app.post('/profile/avatar', requireAuth, express.json({ limit: '2mb' }), (req, res) => {
+  const u = findUser(req.user.username);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  const { dataUrl } = req.body || {};
+  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image')) {
+    return res.status(400).json({ error: 'Invalid image' });
+  }
+  try {
+    const comma = dataUrl.indexOf(',');
+    const meta = dataUrl.slice(0, comma);
+  const extMatch = /data:image\/(png|jpeg|jpg|webp)/.exec(meta);
+  const ext = (extMatch && extMatch[1]) || 'png';
+    const base64 = dataUrl.slice(comma + 1);
+    const buf = Buffer.from(base64, 'base64');
+    if (buf.length > 1024 * 1024 * 2) return res.status(413).json({ error: 'Too large' });
+    const name = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+    fs.writeFileSync(path.join(UPLOADS_DIR, name), buf);
+    u.avatarFile = name;
+    saveJson(USERS_FILE, users);
+    res.json({ ok: true, avatar: `/uploads/${name}` });
+  } catch (err) {
+    console.error('Avatar upload error', err);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+// Serve uploaded avatars statically
+app.use('/uploads', express.static(UPLOADS_DIR, { fallthrough: false }));
+
 // Journal endpoints for client sync
 app.get('/journal', requireAuth, (req, res) => {
-  res.json(journalEntries);
+  const username = req.user?.username;
+  const own = journalEntries.filter((e) => String(e.owner || '') === String(username));
+  res.json(own);
 });
 
 // Accept either a single entry or an array of entries
@@ -327,21 +494,27 @@ app.post('/journal', requireAuth, (req, res) => {
   const body = req.body;
   if (!body) return res.status(400).json({ error: 'Missing body' });
   const items = Array.isArray(body) ? body : [body];
+  const username = req.user?.username;
   for (const it of items) {
-    // avoid duplicate ids
-    const exists = journalEntries.findIndex((e) => e.id === it.id);
+    const copy = Object.assign({}, it, { owner: username });
+    const exists = journalEntries.findIndex((e) => e.id === it.id && String(e.owner || '') === String(username));
     if (exists !== -1) {
-      journalEntries[exists] = it;
+      journalEntries[exists] = copy;
     } else {
-      journalEntries.push(it);
+      journalEntries.push(copy);
     }
   }
   saveJson(JOURNAL_FILE, journalEntries);
-  res.json({ ok: true, count: journalEntries.length });
+  const count = journalEntries.filter((e) => String(e.owner || '') === String(username)).length;
+  res.json({ ok: true, count });
 });
 
 // Mappings endpoints for manual disambiguation
 // mappings functionality removed
 
 const port = process.env.PORT || 5002;
+// Basic health endpoint for quick diagnostics
+app.get('/health', (req, res) => {
+  res.json({ ok: true, uptime: process.uptime(), users: users.length, strains: strains.length });
+});
 app.listen(port, () => console.log(`Backend API listening on http://localhost:${port}`));

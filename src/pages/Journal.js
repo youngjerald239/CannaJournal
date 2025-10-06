@@ -43,8 +43,20 @@ export default function Journal() {
 			let mounted = true;
 			(async () => {
 				try {
+					// Load local entries and merge with server (best-effort)
 					const all = await getAllEntries();
 					if (mounted) setEntries(all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id)));
+					// Try to refresh from server (credentials included so cookie session is sent)
+					try {
+						const res = await fetch('/journal', { credentials: 'include' });
+						if (res.ok) {
+							const data = await res.json();
+							// overwrite local view with server entries
+							if (mounted && Array.isArray(data)) setEntries(data.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id)));
+						}
+					} catch (err) {
+						// ignore
+					}
 				} catch (e) {
 					setEntries([]);
 				}
@@ -130,6 +142,10 @@ export default function Journal() {
 		const entry = { id: timestamp, timestamp, strainId, strainName, effects, mood, rating, notes, photoDataUrl };
 			(async () => {
 				await putEntries([entry]);
+				// push to server (best-effort)
+				try {
+					await fetch('/journal', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([entry]) });
+				} catch (err) { /* ignore */ }
 				const all = await getAllEntries();
 				setEntries(all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id)));
 			})();
