@@ -88,6 +88,19 @@ let strains = loadJson(STRAINS_FILE, []);
 let journalEntries = loadJson(JOURNAL_FILE, []);
 let users = loadJson(USERS_FILE, []);
 
+// Migration: ensure each user has a favorites array (as objects {id, addedAt})
+for (const u of users) {
+  if (!Array.isArray(u.favorites)) {
+    u.favorites = [];
+  } else if (u.favorites.length && typeof u.favorites[0] === 'string') {
+    // convert legacy string IDs to objects
+    u.favorites = u.favorites.map(id => ({ id: String(id), addedAt: new Date().toISOString() }));
+  } else if (u.favorites.length && typeof u.favorites[0] === 'object') {
+    // ensure structure
+    u.favorites = u.favorites.map(f => ({ id: String(f.id), addedAt: f.addedAt || new Date().toISOString() }));
+  }
+}
+
 // Ensure user objects can hold profile information: displayName, bio, avatarFile (filename under uploads)
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR); } catch (e) { console.error('Could not create uploads dir', e.message); }
@@ -97,7 +110,44 @@ function findUser(username) {
 }
 
 app.get('/strains', (req, res) => {
-  res.json(strains);
+  // Enrich strains with derived cannabinoid object & placeholder terpene data if missing
+  // Determine favorites if user is authenticated (optional cookie inspection)
+  let favSet = null;
+  try {
+    const token = parseSessionCookie(req);
+    if (token) {
+      const payload = verifyJWT(token, JWT_SECRET);
+      if (payload) {
+        const sess = sessions.get(payload.sid);
+        if (sess) {
+          const u = findUser(sess.username);
+          if (u && Array.isArray(u.favorites)) favSet = new Set(u.favorites.map(x=> String(x.id || x)));
+        }
+      }
+    }
+  } catch (e) { /* ignore */ }
+
+  const enriched = strains.map(s => {
+    const copy = { ...s };
+    if (!copy.cannabinoids) {
+      copy.cannabinoids = { thc: copy.thc ?? null, cbd: copy.cbd ?? null };
+    }
+    if (!copy.terpenes) {
+      // lightweight deterministic placeholder based on id hash so values stay stable
+      const seed = (typeof copy.id === 'number' ? copy.id : 1) * 9301 % 233280;
+      function rand(f) { return ((seed * (f+1)) % 97) / 300; }
+      copy.terpenes = {
+        myrcene: +rand(1).toFixed(2),
+        limonene: +rand(2).toFixed(2),
+        caryophyllene: +rand(3).toFixed(2),
+        pinene: +rand(4).toFixed(2),
+        linalool: +rand(5).toFixed(2)
+      };
+    }
+    if (favSet) copy.favorite = favSet.has(String(copy.id));
+    return copy;
+  });
+  res.json(enriched);
 });
 
 app.get('/strains/:id', (req, res) => {
@@ -219,6 +269,7 @@ app.post('/auth/signup', (req, res) => {
     const salt = crypto.randomBytes(16);
     const hash = crypto.pbkdf2Sync(String(password), salt, 100000, 64, 'sha512').toString('hex');
     const rec = { username, salt: salt.toString('hex'), hash, displayName: username, bio: '', avatarFile: null };
+    rec.favorites = [];
     users.push(rec);
     try { saveJson(USERS_FILE, users); } catch (e) { /* ignore */ }
     // create session
@@ -485,6 +536,25 @@ app.post('/profile/avatar', requireAuth, express.json({ limit: '2mb' }), (req, r
 // Serve uploaded avatars statically
 app.use('/uploads', express.static(UPLOADS_DIR, { fallthrough: false }));
 
+// Delete current user account (self-service). Removes user, their journal entries, active sessions, and clears cookie.
+app.delete('/profile', requireAuth, (req, res) => {
+  const username = req.user.username;
+  const idx = users.findIndex(u => u.username === username);
+  if (idx === -1) return res.status(404).json({ error: 'Not found' });
+  // Remove user
+  const removed = users.splice(idx, 1)[0];
+  // Remove journal entries owned by user
+  journalEntries = journalEntries.filter(e => String(e.owner || '') !== String(username));
+  // Clear sessions associated with user
+  for (const [sid, sess] of sessions) if (sess.username === username) sessions.delete(sid);
+  // Persist changes
+  try { saveJson(USERS_FILE, users); } catch (e) {}
+  try { saveJson(JOURNAL_FILE, journalEntries); } catch (e) {}
+  // Clear cookie
+  res.setHeader('Set-Cookie', cookie.serialize('session', '', { httpOnly: true, secure: false, path: '/', sameSite: 'lax', maxAge: 0 }));
+  res.json({ ok: true, deleted: true });
+});
+
 // Journal endpoints for client sync
 app.get('/journal', requireAuth, (req, res) => {
   const username = req.user?.username;
@@ -510,6 +580,291 @@ app.post('/journal', requireAuth, (req, res) => {
   saveJson(JOURNAL_FILE, journalEntries);
   const count = journalEntries.filter((e) => String(e.owner || '') === String(username)).length;
   res.json({ ok: true, count });
+});
+
+// ----- Phase 1: Effect aggregation & recommendations -----
+const EFFECT_KEYS = ['relaxation','energy','focus','euphoria','body','head'];
+
+function aggregateEffectsForStrain(strainId) {
+  const relevant = journalEntries.filter(e => e.strainId && String(e.strainId) === String(strainId) && e.effectScores);
+  if (!relevant.length) return { count: 0, averages: Object.fromEntries(EFFECT_KEYS.map(k=>[k,0])) };
+  const sums = Object.fromEntries(EFFECT_KEYS.map(k => [k,0]));
+  for (const e of relevant) {
+    for (const k of EFFECT_KEYS) {
+      if (e.effectScores && typeof e.effectScores[k] === 'number') sums[k] += e.effectScores[k];
+    }
+  }
+  const averages = Object.fromEntries(EFFECT_KEYS.map(k => [k, +(sums[k] / relevant.length).toFixed(2)]));
+  return { count: relevant.length, averages };
+}
+
+app.get('/strains/:id/aggregate-effects', (req, res) => {
+  const { id } = req.params;
+  const agg = aggregateEffectsForStrain(id);
+  res.json(agg);
+});
+
+app.get('/recommendations', requireAuth, (req, res) => {
+  const username = req.user.username;
+  const userEntries = journalEntries.filter(e => e.owner === username && e.effectScores);
+  const rated = userEntries.filter(e => typeof e.rating === 'number');
+  if (!userEntries.length) return res.json([]);
+  // Build user preference vector (average of effectScores weighted by rating >=4 extra weight)
+  const weightVec = Object.fromEntries(EFFECT_KEYS.map(k => [k,0]));
+  let totalW = 0;
+  for (const e of rated) {
+    const w = e.rating >= 4 ? 1.5 : 1.0;
+    totalW += w;
+    for (const k of EFFECT_KEYS) {
+      const v = e.effectScores?.[k];
+      if (typeof v === 'number') weightVec[k] += v * w;
+    }
+  }
+  const userVec = Object.fromEntries(EFFECT_KEYS.map(k => [k, totalW ? weightVec[k] / totalW : 0]));
+  function cosine(a,b){
+    let dot=0, na=0, nb=0; for (const k of EFFECT_KEYS){ const av=a[k]||0, bv=b[k]||0; dot+=av*bv; na+=av*av; nb+=bv*bv; }
+    if (!na || !nb) return 0; return dot / (Math.sqrt(na)*Math.sqrt(nb));
+  }
+  const userStrainIds = new Set(userEntries.map(e => String(e.strainId)));
+  // Favorite-based boost: compute similarity to favorite strains' aggregated effect vectors
+  const userRec = findUser(username);
+  let favoriteEffectVectors = [];
+  if (userRec && Array.isArray(userRec.favorites) && userRec.favorites.length) {
+    for (const fav of userRec.favorites) {
+      const id = String(fav.id || fav);
+      const agg = aggregateEffectsForStrain(id);
+      if (agg.count) favoriteEffectVectors.push(agg.averages);
+    }
+  }
+  function favoriteSimilarity(effects) {
+    if (!favoriteEffectVectors.length) return 0;
+    let best = 0;
+    for (const fv of favoriteEffectVectors) {
+      let dot=0, na=0, nb=0; for (const k of EFFECT_KEYS){ const av=fv[k]||0, bv=effects[k]||0; dot+=av*bv; na+=av*av; nb+=bv*bv; }
+      if (na && nb) { const sim = dot / (Math.sqrt(na)*Math.sqrt(nb)); if (sim > best) best = sim; }
+    }
+    return best;
+  }
+  const candidates = strains.filter(s => s.id && !userStrainIds.has(String(s.id)));
+  const recs = candidates.map(s => {
+    const agg = aggregateEffectsForStrain(s.id);
+    if (!agg.count) return null;
+    const sim = cosine(userVec, agg.averages);
+    const favSim = favoriteSimilarity(agg.averages);
+    const score = sim * 0.8 + favSim * 0.2; // blend
+    return { strainId: s.id, name: s.name, similarity: +sim.toFixed(3), favoriteSimilarity: +favSim.toFixed(3), score: +score.toFixed(3), sampleSize: agg.count, effects: agg.averages };
+  }).filter(Boolean).sort((a,b)=> b.score - a.score).slice(0,5);
+  res.json(recs);
+});
+
+// ----- Achievements (Phase 1 + tiers persisted server-side) -----
+// Simple runtime calculation; for scale move to cached structure later.
+// Tiers: bronze, silver, gold, platinum
+// Icons chosen for quick visual scan (can be replaced with SVGs later)
+const ACHIEVEMENTS = [
+  // Unique strain explorer path
+  { id: 'explorer_5',   name: 'Explorer I',   desc: 'Log 5 unique strains',   type: 'uniqueStrains', target: 5,   tier: 'bronze',   icon: '🥉' },
+  { id: 'explorer_10',  name: 'Explorer II',  desc: 'Log 10 unique strains',  type: 'uniqueStrains', target: 10,  tier: 'silver',   icon: '🥈' },
+  { id: 'explorer_20',  name: 'Explorer III', desc: 'Log 20 unique strains',  type: 'uniqueStrains', target: 20,  tier: 'gold',     icon: '🥇' },
+  { id: 'explorer_40',  name: 'Explorer IV',  desc: 'Log 40 unique strains',  type: 'uniqueStrains', target: 40,  tier: 'platinum', icon: '💎' },
+  // Streak path
+  { id: 'streak_3',     name: 'Consistency I',  desc: '3 day logging streak',  type: 'streak', target: 3,   tier: 'bronze',   icon: '🥉' },
+  { id: 'streak_7',     name: 'Consistency II', desc: '7 day logging streak',  type: 'streak', target: 7,   tier: 'silver',   icon: '🥈' },
+  { id: 'streak_14',    name: 'Consistency III',desc: '14 day logging streak', type: 'streak', target: 14,  tier: 'gold',     icon: '🥇' },
+  { id: 'streak_30',    name: 'Consistency IV', desc: '30 day logging streak', type: 'streak', target: 30,  tier: 'platinum', icon: '💎' }
+];
+
+function computeAchievements(username) {
+  const entries = journalEntries
+    .filter(e => e.owner === username)
+    .sort((a,b)=> new Date(a.timestamp) - new Date(b.timestamp));
+
+  // Unique strains (exclude blank/undefined)
+  const uniqueStrainSet = new Set(entries.map(e => e.strainId ? String(e.strainId) : '').filter(s => s));
+  const uniqueStrains = uniqueStrainSet.size;
+
+  // Streak: consecutive days counting back from the most recent entry date
+  let streak = 0;
+  if (entries.length) {
+    let prevDate = null;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const d = new Date(entries[i].timestamp);
+      if (isNaN(d)) continue; // skip malformed dates
+      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      if (!prevDate) { streak = 1; prevDate = day; continue; }
+      const diffDays = Math.round((prevDate - day) / 86400000);
+      if (diffDays === 1) { streak++; prevDate = day; }
+      else if (diffDays === 0) { continue; }
+      else { break; }
+    }
+  }
+
+  return ACHIEVEMENTS.map(a => {
+    let progress = 0;
+    if (a.type === 'uniqueStrains') progress = uniqueStrains;
+    if (a.type === 'streak') progress = streak;
+    return {
+      id: a.id,
+      name: a.name,
+      description: a.desc,
+      unlocked: progress >= a.target,
+      progress,
+      target: a.target,
+      tier: a.tier,
+      icon: a.icon
+    };
+  });
+}
+
+app.get('/achievements', requireAuth, (req, res) => {
+  const list = computeAchievements(req.user.username);
+  res.json(list);
+});
+
+// ----- Favorites Endpoints -----
+app.get('/favorites', requireAuth, (req, res) => {
+  const u = findUser(req.user.username);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  if (!Array.isArray(u.favorites)) u.favorites = [];
+  res.json(u.favorites);
+});
+
+app.post('/favorites/:id', requireAuth, (req, res) => {
+  const u = findUser(req.user.username);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  if (!Array.isArray(u.favorites)) u.favorites = [];
+  const id = String(req.params.id);
+  if (!u.favorites.find(f => String(f.id || f) === id)) {
+    u.favorites.push({ id, addedAt: new Date().toISOString() });
+  }
+  try { saveJson(USERS_FILE, users); } catch (e) {}
+  res.json({ ok: true, favorites: u.favorites });
+});
+
+app.delete('/favorites/:id', requireAuth, (req, res) => {
+  const u = findUser(req.user.username);
+  if (!u) return res.status(404).json({ error: 'Not found' });
+  if (!Array.isArray(u.favorites)) u.favorites = [];
+  const id = String(req.params.id);
+  u.favorites = u.favorites.filter(f => String(f.id || f) !== id);
+  try { saveJson(USERS_FILE, users); } catch (e) {}
+  res.json({ ok: true, favorites: u.favorites });
+});
+
+// ----- User Weekly Summary Stats -----
+function computeUserSummary(username) {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // today 00:00
+  const start7 = new Date(start.getTime() - 6 * 86400000); // include today -> 7 days window
+  const entries = journalEntries.filter(e => e.owner === username);
+  const last7 = entries.filter(e => {
+    const d = new Date(e.timestamp);
+    if (isNaN(d)) return false;
+    return d >= start7 && d <= now;
+  });
+
+  // Activity by day map
+  const activityMap = new Map();
+  for (let i=0;i<7;i++) {
+    const day = new Date(start7.getFullYear(), start7.getMonth(), start7.getDate() + i);
+    const key = day.toISOString().slice(0,10);
+    activityMap.set(key, 0);
+  }
+  for (const e of last7) {
+    const d = new Date(e.timestamp);
+    if (isNaN(d)) continue;
+    const key = new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString().slice(0,10);
+    if (activityMap.has(key)) activityMap.set(key, activityMap.get(key)+1);
+  }
+  const activityByDay = Array.from(activityMap.entries()).map(([date,count])=>({date,count}));
+
+  // Unique strains
+  const uniqueAll = new Set(entries.map(e => e.strainId ? String(e.strainId) : '').filter(Boolean));
+  const unique7 = new Set(last7.map(e => e.strainId ? String(e.strainId) : '').filter(Boolean));
+
+  // Rating averages
+  function avg(list, accessor) {
+    const vals = list.map(accessor).filter(v => typeof v === 'number');
+    if (!vals.length) return 0;
+    return +(vals.reduce((a,b)=>a+b,0)/vals.length).toFixed(2);
+  }
+  const ratingAverageLast7 = avg(last7, e => e.rating);
+  const ratingAverageAllTime = avg(entries, e => e.rating);
+
+  // Effect averages (last 7)
+  const effectSums = Object.fromEntries(EFFECT_KEYS.map(k=>[k,0]));
+  let effectCount = 0;
+  for (const e of last7) {
+    if (!e.effectScores) continue;
+    let contributed = false;
+    for (const k of EFFECT_KEYS) {
+      const v = e.effectScores[k];
+      if (typeof v === 'number') { effectSums[k]+=v; contributed = true; }
+    }
+    if (contributed) effectCount++;
+  }
+  const effectAveragesLast7 = Object.fromEntries(EFFECT_KEYS.map(k => [k, effectCount? +(effectSums[k]/effectCount).toFixed(2):0]));
+
+  // Top strains last 7 (by count then avg rating) limit 3
+  const strainStats = new Map();
+  for (const e of last7) {
+    if (!e.strainId) continue;
+    const key = String(e.strainId);
+    if (!strainStats.has(key)) strainStats.set(key, { count:0, ratings:[], name: e.strainName || '' });
+    const rec = strainStats.get(key);
+    rec.count++;
+    if (typeof e.rating === 'number') rec.ratings.push(e.rating);
+    if (!rec.name && e.strainName) rec.name = e.strainName;
+  }
+  const topStrainsLast7 = Array.from(strainStats.entries()).map(([id,rec])=>({
+    strainId: id,
+    name: rec.name || (strains.find(s=>String(s.id)===id)?.name || 'Unknown'),
+    count: rec.count,
+    avgRating: rec.ratings.length ? +(rec.ratings.reduce((a,b)=>a+b,0)/rec.ratings.length).toFixed(2) : 0
+  })).sort((a,b)=> b.count - a.count || b.avgRating - a.avgRating).slice(0,3);
+
+  // Streak reuse (mirror logic in computeAchievements but without duplication). We'll compute fresh.
+  let streak = 0;
+  const sorted = entries.slice().sort((a,b)=> new Date(a.timestamp) - new Date(b.timestamp));
+  if (sorted.length) {
+    let prevDate = null;
+    for (let i = sorted.length -1; i>=0; i--) {
+      const d = new Date(sorted[i].timestamp);
+      if (isNaN(d)) continue;
+      const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      if (!prevDate) { streak = 1; prevDate = day; continue; }
+      const diffDays = Math.round((prevDate - day)/86400000);
+      if (diffDays === 1) { streak++; prevDate = day; }
+      else if (diffDays === 0) { continue; }
+      else { break; }
+    }
+  }
+
+  return {
+    period: { start: start7.toISOString().slice(0,10), end: start.toISOString().slice(0,10) },
+    counts: {
+      last7: last7.length,
+      allTime: entries.length,
+      uniqueStrainsLast7: unique7.size,
+      uniqueStrainsAllTime: uniqueAll.size
+    },
+    streak,
+    ratingAverageLast7,
+    ratingAverageAllTime,
+    effectAveragesLast7,
+    topStrainsLast7,
+    activityByDay
+  };
+}
+
+app.get('/stats/summary', requireAuth, (req, res) => {
+  try {
+    const summary = computeUserSummary(req.user.username);
+    res.json(summary);
+  } catch (e) {
+    console.error('Summary error', e);
+    res.status(500).json({ error: 'Failed to compute summary' });
+  }
 });
 
 // Mappings endpoints for manual disambiguation

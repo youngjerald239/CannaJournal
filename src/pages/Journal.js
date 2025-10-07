@@ -8,16 +8,42 @@ export default function Journal() {
 
 	// form state
 	const [strainId, setStrainId] = useState('');
-	const [effectsInput, setEffectsInput] = useState('');
-	const [effects, setEffects] = useState([]);
+	// Structured effect sliders (1-5)
+	const [effectScores, setEffectScores] = useState({
+		relaxation: 3,
+		energy: 3,
+		focus: 3,
+		euphoria: 3,
+		body: 3,
+		head: 3,
+	});
 	const [mood, setMood] = useState('Relaxed');
 	const [rating, setRating] = useState(3);
 	const [notes, setNotes] = useState('');
+	// undo/redo stacks for notes (store previous snapshots)
+	const [history, setHistory] = useState([]); // array of past note states (used for undo)
+	const [future, setFuture] = useState([]);   // array of undone states we can redo
+	const notesRef = useRef(null);
+	const NOTE_MAX = 1000;
+	// Tag personalization & autocomplete
+	const DEFAULT_TAGS = ['Onset','Flavor','Aroma','Environment','SideEffect','Focus','Relax','Sleep','Creativity'];
+	const [quickTags, setQuickTags] = useState(DEFAULT_TAGS);
+	const [caretPos, setCaretPos] = useState(0);
+	const [suggestions, setSuggestions] = useState([]); // current filtered tags
+	const [showSuggest, setShowSuggest] = useState(false);
+	const [activeSuggest, setActiveSuggest] = useState(0);
+	const [suggestQuery, setSuggestQuery] = useState('');
+	// Stats & sentiment
+	const [sentiment, setSentiment] = useState(null); // {score,label}
+	const [readStats, setReadStats] = useState({ words:0, ease:null, easeLabel:'', readingTime: '0s' });
 	const [photoDataUrl, setPhotoDataUrl] = useState(null);
 
 	const [entries, setEntries] = useState([]);
+	const [recs, setRecs] = useState([]);
+	const [loadingRecs, setLoadingRecs] = useState(false);
 	const fileRef = useRef(null);
 
+	// Load strains from backend once
 	useEffect(() => {
 		// load strains from backend (best-effort)
 		let cancelled = false;
@@ -64,15 +90,8 @@ export default function Journal() {
 			return () => { mounted = false; };
 		}, []);
 
-	function addEffectTag() {
-		const txt = effectsInput.trim();
-		if (!txt) return;
-		if (!effects.includes(txt)) setEffects((s) => [...s, txt]);
-		setEffectsInput('');
-	}
-
-	function removeEffectTag(tag) {
-		setEffects((s) => s.filter((t) => t !== tag));
+	function updateEffect(key, value) {
+		setEffectScores((prev) => ({ ...prev, [key]: Number(value) }));
 	}
 
 		async function resizeImage(file, maxDim = 1024, quality = 0.75) {
@@ -127,11 +146,12 @@ export default function Journal() {
 
 	function clearForm() {
 		setStrainId('');
-		setEffects([]);
-		setEffectsInput('');
+		setEffectScores({ relaxation:3, energy:3, focus:3, euphoria:3, body:3, head:3 });
 		setMood('Relaxed');
 		setRating(3);
 		setNotes('');
+		setSentiment(null);
+		setReadStats({words:0,ease:null,easeLabel:'', readingTime:'0s'});
 		setPhotoDataUrl(null);
 		if (fileRef.current) fileRef.current.value = null;
 	}
@@ -139,25 +159,68 @@ export default function Journal() {
 	function saveEntry() {
 		const timestamp = new Date().toISOString();
 		const strainName = strains.find((s) => String(s.id) === String(strainId))?.name || (strainId ? strainId : 'Unknown');
-		const entry = { id: timestamp, timestamp, strainId, strainName, effects, mood, rating, notes, photoDataUrl };
-			(async () => {
-				await putEntries([entry]);
-				// push to server (best-effort)
-				try {
-					await fetch('/journal', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([entry]) });
-				} catch (err) { /* ignore */ }
-				const all = await getAllEntries();
-				setEntries(all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id)));
-			})();
-			clearForm();
+		const entry = { id: timestamp, timestamp, strainId, strainName, mood, rating, notes, photoDataUrl, effectScores };
+		(async () => {
+			await putEntries([entry]);
+			try {
+				await fetch('/journal', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([entry]) });
+			} catch (err) { /* ignore */ }
+			const all = await getAllEntries();
+			const sorted = all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id));
+			setEntries(sorted);
+			if (sorted.length) {
+				setLoadingRecs(true);
+				fetch('/recommendations', { credentials: 'include' })
+					.then(r => r.ok ? r.json() : [])
+					.then(d => setRecs(Array.isArray(d)?d:[]))
+					.catch(()=>{})
+					.finally(()=> setLoadingRecs(false));
+			}
+		})();
+		clearForm();
 	}
+
+		// Load personalized tag ordering (DEFAULT_TAGS is static)
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		useEffect(()=>{
+			try {
+				const raw = localStorage.getItem('cj_last_tags');
+				if (raw) {
+					const arr = JSON.parse(raw);
+					if (Array.isArray(arr)) {
+						const merged = Array.from(new Set(arr.concat(DEFAULT_TAGS)));
+						setQuickTags(merged);
+					}
+				}
+			} catch(_){}
+		},[]); // DEFAULT_TAGS intentionally static
+
+		function recordTag(tag){
+			try {
+				const raw = localStorage.getItem('cj_last_tags');
+				let arr = Array.isArray(JSON.parse(raw||'[]')) ? JSON.parse(raw||'[]') : [];
+				arr = [tag, ...arr.filter(t=>t!==tag)].slice(0,25);
+				localStorage.setItem('cj_last_tags', JSON.stringify(arr));
+				const merged = Array.from(new Set(arr.concat(DEFAULT_TAGS)));
+				setQuickTags(merged);
+			} catch(_){}
+		}
 
 	function deleteEntry(id) {
 			if (!window.confirm('Delete this entry?')) return;
 			(async () => {
 				await dbDeleteEntry(id);
 				const all = await getAllEntries();
-				setEntries(all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id)));
+				const sorted = all.sort((a,b)=> (b.timestamp||b.id).localeCompare(a.timestamp||a.id));
+				setEntries(sorted);
+				if (sorted.length) {
+					setLoadingRecs(true);
+					fetch('/recommendations', { credentials: 'include' })
+						.then(r => r.ok ? r.json() : [])
+						.then(d => setRecs(Array.isArray(d)?d:[]))
+						.catch(()=>{})
+						.finally(()=> setLoadingRecs(false));
+				}
 			})();
 	}
 
@@ -260,11 +323,230 @@ export default function Journal() {
 
 	// Server sync removed: syncToServer and fetchFromServer are intentionally not present here.
 
+	function insertTag(tag){
+		setNotes(n => {
+			const before = n.slice(0, caretPos);
+			const after = n.slice(caretPos);
+			const needsNL = before && !before.endsWith('\n') && !before.endsWith(' ');
+			const insertion = (needsNL? '\n' : '') + '#' + tag + ' ';
+			const next = (before + insertion + after).slice(0, NOTE_MAX);
+			// update caret after insertion
+			setTimeout(()=> {
+				const pos = Math.min((before + insertion).length, next.length);
+				notesRef.current?.setSelectionRange(pos,pos);
+				notesRef.current?.focus();
+			}, 0);
+			setHistory(h => [...h, n].slice(-50));
+			setFuture([]);
+			return next;
+		});
+		recordTag(tag);
+		setShowSuggest(false); setSuggestQuery('');
+	}
+
+	function renderNotes(text){
+		// Highlight #Tags, emphasis *word*, linkify URLs, and show inline image previews for direct image links
+		const urlRegex = /(https?:\/\/[^\s)]+)/g;
+		const parts = text.split(/(#[A-Za-z][A-Za-z0-9_-]*|\*[^*]+\*|https?:\/\/[^\s)]+)/g).filter(Boolean);
+		return (
+			<div className='space-y-2'>
+				<p className='whitespace-pre-wrap break-words'>
+					{parts.map((p,i) => {
+						if (p.startsWith('#')) return <span key={i} className='text-emerald-300 font-medium'>{p}</span>;
+						if (/^https?:\/\//.test(p)) return <a key={i} href={p} target='_blank' rel='noopener noreferrer' className='text-teal-300 hover:underline'>{p}</a>;
+						if (p.startsWith('*') && p.endsWith('*') && p.length>2) return <em key={i} className='text-emerald-200 not-italic font-semibold'>{p.slice(1,-1)}</em>;
+						return <span key={i}>{p}</span>;
+					})}
+				</p>
+				{/* Inline image previews: look for lines that are just an image URL */}
+				<div className='flex flex-wrap gap-2'>
+					{Array.from(new Set((text.match(urlRegex)||[])))
+						.filter(u => /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(u))
+						.slice(0,4)
+						.map(u => (
+							<a key={u} href={u} target='_blank' rel='noopener noreferrer' className='block'>
+								<img src={u} alt='' loading='lazy' className='max-h-24 rounded shadow border border-emerald-500/20 hover:border-emerald-400/50 transition' />
+							</a>
+						))}
+				</div>
+			</div>
+		);
+	}
+
+	// Update stats & sentiment when notes change
+	useEffect(()=>{
+		const text = notes;
+		const words = (text.match(/\b[\w'’-]+\b/g)||[]).length; // removed unnecessary escape for hyphen
+		const sentences = Math.max(1, (text.match(/[.!?]+/g)||[]).length);
+		// naive syllable estimate
+		const syllables = (text.toLowerCase().match(/[aeiouy]{1,2}/g)||[]).length;
+		// Flesch Reading Ease formula
+		const ease = 206.835 - 1.015 * (words / sentences) - 84.6 * (syllables / Math.max(1, words));
+		let easeLabel = 'Easy';
+		if (ease < 30) easeLabel='Very Hard'; else if (ease < 50) easeLabel='Hard'; else if (ease < 60) easeLabel='Challenging'; else if (ease < 70) easeLabel='Standard'; else if (ease < 80) easeLabel='Fairly Easy';
+		const readingTimeSec = Math.round((words/200)*60); // 200 wpm
+		const rt = readingTimeSec < 60 ? readingTimeSec + 's' : (Math.round(readingTimeSec/60) + 'm');
+		setReadStats({ words, ease: +ease.toFixed(1), easeLabel, readingTime: rt });
+		// sentiment heuristic
+		const positives = ['relaxed','calm','happy','euphoric','focused','creative','uplifted','pleasant','smooth','tasty'];
+		const negatives = ['anxious','paranoid','dry','headache','dizzy','cough','harsh','nausea','nauseous'];
+		let score=0;
+		const lc = text.toLowerCase();
+		for (const p of positives) if (lc.includes(p)) score++;
+		for (const n of negatives) if (lc.includes(n)) score--;
+		let label='Neutral';
+		if (score>1) label='Positive'; else if (score<-1) label='Negative'; else if (score!==0) label='Mixed';
+		setSentiment(text.trim()? {score,label}: null);
+	},[notes]);
+
+	// Autocomplete detection on notes change or caret move
+	function handleNotesChange(e){
+		const val = e.target.value.slice(0, NOTE_MAX);
+		setNotes(prev => {
+			if (prev !== val){
+				setHistory(h => [...h, prev].slice(-50));
+				setFuture([]); // clear redo stack when new change made
+			}
+			return val;
+		});
+		setCaretPos(e.target.selectionStart || 0);
+		setTimeout(()=> computeSuggestions(val, e.target.selectionStart||0),0);
+	}
+
+	function undoNotes(){
+		setHistory(h => {
+			if (!h.length) return h;
+			setNotes(current => {
+				const prev = h[h.length-1];
+				setFuture(f => [current, ...f].slice(0,50));
+				return prev;
+			});
+			return h.slice(0,-1);
+		});
+	}
+
+	function redoNotes(){
+		setFuture(f => {
+			if (!f.length) return f;
+			setNotes(current => {
+				const next = f[0];
+				setHistory(h => [...h, current].slice(-50));
+				return next;
+			});
+			return f.slice(1);
+		});
+	}
+
+	function handleNotesKey(e){
+		// undo / redo shortcuts (Ctrl+Z / Ctrl+Y or Cmd on Mac)
+		if ((e.ctrlKey||e.metaKey) && !e.shiftKey && e.key === 'z') { e.preventDefault(); undoNotes(); return; }
+		if ((e.ctrlKey||e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key==='Z'))) { e.preventDefault(); redoNotes(); return; }
+		if (showSuggest && suggestions.length){
+			if (e.key === 'ArrowDown'){ e.preventDefault(); setActiveSuggest(i => (i+1)%suggestions.length); }
+			else if (e.key === 'ArrowUp'){ e.preventDefault(); setActiveSuggest(i => (i-1+suggestions.length)%suggestions.length); }
+			else if (e.key === 'Enter'){ e.preventDefault(); applySuggestion(activeSuggest); }
+			else if (e.key === 'Tab'){ e.preventDefault(); applySuggestion(activeSuggest); }
+			else if (e.key === 'Escape'){ setShowSuggest(false); }
+		}
+	}
+
+	function computeSuggestions(text, pos){
+		try {
+			const before = text.slice(0,pos);
+			const match = before.match(/(^|\s)(#[A-Za-z0-9_-]*)$/);
+			if (!match){ setShowSuggest(false); return; }
+			const raw = match[2];
+			const q = raw.slice(1); // remove '#'
+			setSuggestQuery(q);
+			const pool = quickTags;
+			const filtered = pool.filter(t => t.toLowerCase().startsWith(q.toLowerCase()));
+			setSuggestions(filtered.slice(0,8));
+			setActiveSuggest(0);
+			setShowSuggest(true);
+		} catch(_) { setShowSuggest(false); }
+	}
+
+
+	function applySuggestion(i){
+		const chosen = suggestions[i];
+		if (!chosen) return;
+		// replace current partial token
+		setNotes(prev => {
+			const before = prev.slice(0, caretPos);
+			const after = prev.slice(caretPos);
+			const m = before.match(/(^|\s)(#[A-Za-z0-9_-]*)$/);
+			if (!m) return prev;
+			const start = before.length - m[2].length;
+			const updatedBefore = before.slice(0,start) + '#' + chosen + ' ';
+			const next = (updatedBefore + after).slice(0,NOTE_MAX);
+			setTimeout(()=>{
+				const pos = updatedBefore.length;
+				notesRef.current?.setSelectionRange(pos,pos);
+				notesRef.current?.focus();
+			},0);
+			recordTag(chosen);
+			return next;
+		});
+		setShowSuggest(false);
+	}
+
+	function handleNotesSelect(){
+		if (!notesRef.current) return;
+		const pos = notesRef.current.selectionStart || 0;
+		setCaretPos(pos);
+		computeSuggestions(notes, pos);
+	}
+
+	function onNotesBlur(){
+		// delay hiding to allow click on suggestion
+		setTimeout(()=> setShowSuggest(false), 150);
+	}
+
+	// Drag & drop text file support
+	function handleNotesDrop(e){
+		e.preventDefault();
+		const file = e.dataTransfer.files?.[0];
+		if (!file) return;
+		if (!file.type.startsWith('text')) return;
+		const reader = new FileReader();
+		reader.onload = () => {
+			const content = String(reader.result||'');
+			setNotes(n => (n + (n? '\n':'') + content).slice(0,NOTE_MAX));
+		};
+		reader.readAsText(file);
+	}
+	function handleNotesDragOver(e){ e.preventDefault(); }
+
 	return (
 		<div className='p-4'>
 			<div className='max-w-4xl mx-auto'>
 				<h1 className='text-2xl font-bold mb-3'>Journal</h1>
 				<p className='mb-4 text-sm text-green-100/80'>Log how different strains make you feel. Entries are stored locally in your browser.</p>
+
+				{entries.length > 0 && (
+					<section className='mb-6 bg-black/30 p-4 rounded-lg border border-green-800/30'>
+						<div className='flex items-center justify-between mb-2'>
+							<h2 className='font-semibold'>Recommendations</h2>
+							{loadingRecs && <span className='text-xs text-green-200/70'>Updating…</span>}
+						</div>
+						{!loadingRecs && recs.length === 0 && <div className='text-sm text-green-100/60'>Not enough data yet. Log more entries to personalize suggestions.</div>}
+						{recs.length > 0 && (
+							<ul className='space-y-2 text-sm'>
+								{recs.map(r => (
+									<li key={r.strainId} className='flex items-center justify-between bg-green-900/20 px-3 py-2 rounded border border-green-700/30'>
+										<div>
+											<div className='font-medium'>{r.name}</div>
+											<div className='text-xs text-green-100/70'>Similarity: {(r.similarity*100).toFixed(1)}% • Samples: {r.sampleSize}</div>
+										</div>
+										<div className='hidden sm:block text-[10px] text-right text-green-200/70'>
+											{Object.entries(r.effects).map(([k,v]) => <span key={k} className='inline-block mr-2'>{k}:{v}</span>)}
+										</div>
+									</li>
+								))}
+							</ul>
+						)}
+					</section>
+				)}
 
 				<section className='bg-black/40 p-4 rounded-lg mb-6'>
 					<h2 className='font-semibold mb-2'>New entry</h2>
@@ -293,18 +575,15 @@ export default function Journal() {
 						</label>
 					</div>
 
-					<div className='mt-3'>
-						<div className='text-sm mb-1'>Effects (tags)</div>
-						<div className='flex gap-2'>
-							<input value={effectsInput} onChange={(e) => setEffectsInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addEffectTag(); } }} placeholder='e.g. euphoric, sleepy' className='flex-1 p-2 rounded bg-gray-800' />
-							<button onClick={addEffectTag} className='px-3 rounded bg-green-600 text-white'>Add</button>
-						</div>
-						<div className='mt-2 flex flex-wrap gap-2'>
-							{effects.map((t) => (
-								<span key={t} className='inline-flex items-center gap-2 bg-green-800/60 text-sm px-2 py-1 rounded'>
-									{t}
-									<button onClick={() => removeEffectTag(t)} className='text-xs text-red-300 ml-1' aria-label={`Remove ${t}`}>×</button>
-								</span>
+					<div className='mt-4'>
+						<h3 className='text-sm font-semibold mb-2'>Effect Ratings (1–5)</h3>
+						<div className='grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm'>
+							{Object.entries(effectScores).map(([k,v]) => (
+								<label key={k} className='flex flex-col gap-1'>
+									<span className='capitalize'>{k}</span>
+									<input type='range' min='1' max='5' value={v} onChange={(e)=>updateEffect(k,e.target.value)} />
+									<div className='text-xs'>Value: {v}</div>
+								</label>
 							))}
 						</div>
 					</div>
@@ -315,9 +594,60 @@ export default function Journal() {
 						<div className='text-sm mt-1'>Value: <strong>{rating}</strong></div>
 					</div>
 
-					<div className='mt-3'>
-						<div className='text-sm mb-1'>Notes</div>
-						<textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} className='w-full p-2 rounded bg-gray-800' />
+					{/* Notes section (enhanced styling) */}
+					<div className='mt-5'>
+						<div className='flex items-center justify-between mb-1'>
+							<div className='text-sm font-semibold flex items-center gap-2'>
+								<span>Notes</span>
+								<span className='text-[10px] px-2 py-0.5 rounded-full bg-emerald-700/30 border border-emerald-400/30 text-emerald-200 tracking-wide'>Optional</span>
+							</div>
+							<div className='text-[11px] text-emerald-200/70'>{notes.length}/{NOTE_MAX}</div>
+						</div>
+						<div className='flex gap-2 mb-2'>
+							<button type='button' disabled={!history.length} onClick={undoNotes} className={`px-2 py-1 rounded text-[11px] border ${history.length ? 'bg-emerald-800/30 border-emerald-500/30 text-emerald-100 hover:bg-emerald-700/40' : 'bg-emerald-900/20 border-emerald-500/10 text-emerald-400/40 cursor-not-allowed'}`}>Undo</button>
+							<button type='button' disabled={!future.length} onClick={redoNotes} className={`px-2 py-1 rounded text-[11px] border ${future.length ? 'bg-emerald-800/30 border-emerald-500/30 text-emerald-100 hover:bg-emerald-700/40' : 'bg-emerald-900/20 border-emerald-500/10 text-emerald-400/40 cursor-not-allowed'}`}>Redo</button>
+						</div>
+						<div className='flex flex-wrap gap-2 mb-2'>
+							{quickTags.slice(0,12).map(tag => (
+								<button key={tag} type='button' onClick={() => insertTag(tag)} className='px-2 py-1 rounded bg-emerald-900/30 hover:bg-emerald-800/40 text-[11px] text-emerald-200 border border-emerald-500/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/50'>#{tag}</button>
+							))}
+						</div>
+						<div className='relative group'>
+							<div aria-hidden='true' className='pointer-events-none absolute inset-0 rounded-lg border border-emerald-400/20 bg-gradient-to-br from-slate-900/70 via-slate-900/60 to-emerald-950/60 shadow-inner overflow-hidden'>
+								<div className='absolute inset-0 opacity-[0.15]' style={{backgroundImage:'repeating-linear-gradient(to bottom, rgba(255,255,255,0.08) 0px, rgba(255,255,255,0.08) 1px, transparent 1px, transparent 24px)'}} />
+								<div className='absolute left-10 top-0 bottom-0 w-px bg-gradient-to-b from-transparent via-emerald-400/40 to-transparent opacity-60' />
+							</div>
+							<textarea
+								ref={notesRef}
+								value={notes}
+								onChange={handleNotesChange}
+								onKeyDown={handleNotesKey}
+								onSelect={handleNotesSelect}
+								onBlur={onNotesBlur}
+								onDrop={handleNotesDrop}
+								onDragOver={handleNotesDragOver}
+								rows={5}
+								placeholder='Describe flavor, onset time, environment, side effects... Use #tags or *emphasis*'
+								className='relative w-full resize-y min-h-[140px] font-mono text-[13px] leading-[24px] tracking-tight bg-transparent text-emerald-50 px-4 py-3 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60'
+							/>
+							{showSuggest && suggestions.length>0 && (
+								<div className='absolute z-20 mt-1 left-4 top-full w-56 rounded-lg border border-emerald-400/30 bg-slate-950/95 backdrop-blur p-1 shadow-xl animate-fade-in text-sm'>
+									{suggestions.map((s,i)=>(
+										<button key={s} type='button' onMouseDown={(e)=>{e.preventDefault(); applySuggestion(i);}} className={`w-full text-left px-3 py-1 rounded-md transition ${i===activeSuggest ? 'bg-emerald-700/40 text-emerald-100' : 'hover:bg-emerald-800/30 text-emerald-200'}`}>#{s}</button>
+									))}
+									{suggestQuery && suggestions.length===0 && <div className='px-3 py-1 text-emerald-300/70 text-[12px]'>No matches</div>}
+								</div>
+							)}
+							{/* Stats & sentiment row */}
+							<div className='flex flex-wrap items-center gap-3 mt-2 text-[11px] text-emerald-300/70'>
+								<span>{readStats.words} words</span>
+								<span>· {readStats.readingTime}</span>
+								{readStats.ease != null && <span>· Ease: <span className='text-emerald-200'>{readStats.ease} ({readStats.easeLabel})</span></span>}
+								{sentiment && <span>· Sentiment: <span className={sentiment.score>1? 'text-green-300': sentiment.score<-1? 'text-red-300':'text-yellow-200'}>{sentiment.label}</span></span>}
+								<span className='ml-auto hidden sm:inline text-emerald-400/50'>Drag & drop a .txt file to append</span>
+							</div>
+							<div className='absolute right-2 bottom-2 text-[10px] text-emerald-300/60 opacity-0 group-hover:opacity-100 transition'>Markdown-lite #tags supported</div>
+						</div>
 					</div>
 
 					<div className='mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 items-center'>
@@ -355,8 +685,8 @@ export default function Journal() {
 						<p className='text-sm text-green-100/60'>No entries yet — create your first one above.</p>
 					) : (
 						<div className='space-y-3'>
-							{entries.map((en) => (
-								<article key={en.id} className='bg-black/40 p-3 rounded-lg'>
+								{entries.map((en) => (
+									<article key={en.id} className='bg-gradient-to-br from-slate-900/60 via-slate-900/50 to-emerald-950/40 p-3 rounded-xl border border-emerald-400/10 shadow-sm hover:border-emerald-400/30 transition-colors'>
 									<div className='flex items-start gap-3'>
 										{en.photoDataUrl ? <img src={en.photoDataUrl} alt='' className='w-20 h-16 object-cover rounded' /> : <div className='w-20 h-16 bg-gray-800 rounded flex items-center justify-center text-sm'>No photo</div>}
 										<div className='flex-1'>
@@ -367,9 +697,14 @@ export default function Journal() {
 												</div>
 												<div className='text-sm'>Mood: <strong>{en.mood}</strong></div>
 											</div>
-											<div className='mt-2 text-sm'>Effects: {en.effects.join(', ') || '—'}</div>
+											<div className='mt-2 text-sm'>Effects: {en.effectScores ? Object.entries(en.effectScores).map(([k,v])=>`${k}:${v}`).join(', ') : '—'}</div>
 											<div className='mt-1 text-sm'>Rating: {en.rating}</div>
-											{en.notes && <div className='mt-2 text-sm text-green-100/80'>{en.notes}</div>}
+											{en.notes && (
+												<div className='mt-3 text-[13px] leading-relaxed relative pl-3'>
+													<div className='absolute left-0 top-0 bottom-0 w-px bg-gradient-to-b from-emerald-500/50 via-emerald-400/30 to-transparent' />
+													{renderNotes(en.notes)}
+												</div>
+											)}
 										</div>
 									</div>
 									<div className='mt-2 text-right'>
