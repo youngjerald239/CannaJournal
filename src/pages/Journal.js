@@ -50,7 +50,7 @@ export default function Journal() {
 		async function load() {
 			setLoadingStrains(true);
 			try {
-				const res = await fetch('http://localhost:5002/strains');
+				const res = await fetch('/strains');
 				if (!res.ok) throw new Error('no-strains');
 				const data = await res.json();
 				if (!cancelled) setStrains(Array.isArray(data) ? data : []);

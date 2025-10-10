@@ -10,7 +10,7 @@ export default function Admin() {
   async function loadAll() {
     setLoading(true);
     try {
-      const s = await fetch('http://localhost:5002/strains').then((r) => r.json());
+  const s = await fetch('/strains').then((r) => r.json());
       setStrains(s || []);
       try {
         const us = await fetch('/users', { credentials: 'include' }).then((r) => r.json());
@@ -31,7 +31,7 @@ export default function Admin() {
     if (!newStrainName) return;
     try {
       const body = { name: newStrainName };
-      const res = await fetch('http://localhost:5002/strains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const res = await fetch('/strains', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (res.ok) {
         setNewStrainName('');
         loadAll();
@@ -61,7 +61,7 @@ export default function Admin() {
               <button className='ml-2 text-red-600' onClick={async () => {
                 if (!window.confirm(`Delete strain ${s.name}?`)) return;
                 try {
-                  const res = await fetch(`http://localhost:5002/strains/${s.id}`, { method: 'DELETE' });
+                  const res = await fetch(`/strains/${s.id}`, { method: 'DELETE' });
                   if (res.ok) loadAll();
                 } catch (e) {}
               }}>Delete</button>
