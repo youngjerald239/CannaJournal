@@ -1,6 +1,7 @@
-
 import { useEffect, useState, useRef } from 'react';
 import { getAllEntries, putEntries, deleteEntry as dbDeleteEntry } from '../lib/db';
+// Static tag list used for suggestions; module-scoped so it's stable and not a missing-deps source
+const DEFAULT_TAGS = ['Onset','Flavor','Aroma','Environment','SideEffect','Focus','Relax','Sleep','Creativity'];
 
 export default function Journal() {
 	const [strains, setStrains] = useState([]);
@@ -26,7 +27,6 @@ export default function Journal() {
 	const notesRef = useRef(null);
 	const NOTE_MAX = 1000;
 	// Tag personalization & autocomplete
-	const DEFAULT_TAGS = ['Onset','Flavor','Aroma','Environment','SideEffect','Focus','Relax','Sleep','Creativity'];
 	const [quickTags, setQuickTags] = useState(DEFAULT_TAGS);
 	const [caretPos, setCaretPos] = useState(0);
 	const [suggestions, setSuggestions] = useState([]); // current filtered tags
@@ -181,7 +181,6 @@ export default function Journal() {
 	}
 
 		// Load personalized tag ordering (DEFAULT_TAGS is static)
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 		useEffect(()=>{
 			try {
 				const raw = localStorage.getItem('cj_last_tags');
@@ -193,7 +192,7 @@ export default function Journal() {
 					}
 				}
 			} catch(_){}
-		},[]); // DEFAULT_TAGS intentionally static
+		},[]);
 
 		function recordTag(tag){
 			try {

@@ -38,6 +38,16 @@ if (weakSecrets.length) {
   process.exit(1);
 }
 
+// Optional Postgres guidance
+// Accept postgres:// or postgresql://
+if (process.env.DATABASE_URL && !/^postgres(ql)?:\/\//i.test(process.env.DATABASE_URL)) {
+  console.warn('[warn] DATABASE_URL does not appear to be a valid postgres URL.');
+}
+
+// Encourage distinct secrets
+const distinct = new Set([process.env.JWT_SECRET, process.env.JOURNAL_TOKEN, process.env.ADMIN_PASS]);
+if (distinct.size < 3) console.warn('[warn] Some secret values appear identical. Use distinct values.');
+
 // Optional warning for default admin username
 if (process.env.ADMIN_USER === 'admin') {
   console.warn('[warn] ADMIN_USER is set to default "admin". Consider changing in production.');

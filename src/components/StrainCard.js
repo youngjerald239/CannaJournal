@@ -1,7 +1,8 @@
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, memo } from 'react';
+import { getAggregateEffects } from '../lib/effectsCache';
 
-export default function StrainCard({ strain, onToggleFavorite, onFilterType, isTypeActive }) {
+function StrainCard({ strain, onToggleFavorite, onFilterType, isTypeActive, cardClass='', onSelect, active=false, registerRef }) {
 	const STORAGE_KEY = 'cj_last_view_' + strain.id;
 	const initialView = (()=>{ try { return localStorage.getItem(STORAGE_KEY) || 'consumer'; } catch(_){ return 'consumer'; }})();
 	const [view, setView] = useState(initialView);
@@ -10,6 +11,10 @@ export default function StrainCard({ strain, onToggleFavorite, onFilterType, isT
 	const [clicked, setClicked] = useState(false); // fancy click feedback
 	const cardRef = useRef(null);
 	const list = (v) => (Array.isArray(v) ? v.join(', ') : v ?? '—');
+
+	// Brief pulse after selection, then stop while keeping the glow
+	const [pulsing, setPulsing] = useState(false);
+	const pulseTimerRef = useRef(null);
 
 	// respect user reduced-motion setting
 	const [reduceMotion, setReduceMotion] = useState(false);
@@ -49,12 +54,12 @@ export default function StrainCard({ strain, onToggleFavorite, onFilterType, isT
 		? strain.effects
 		: [];
 
-	// Phase 1: aggregate effect scores + show basic visualization
+	// Aggregate effect scores with caching to avoid redundant network calls
 	const [agg, setAgg] = useState(null);
 	useEffect(() => {
-		let active = true;
-		fetch(`/strains/${strain.id}/aggregate-effects`).then(r=> r.ok ? r.json(): null).then(d=> { if (active) setAgg(d); }).catch(()=>{});
-		return () => { active = false; };
+		let mounted = true;
+		getAggregateEffects(strain.id).then(d => { if (mounted) setAgg(d); });
+		return () => { mounted = false; };
 	}, [strain.id]);
 
 	function renderMiniEffects() {
@@ -113,12 +118,30 @@ export default function StrainCard({ strain, onToggleFavorite, onFilterType, isT
 		const base = 'text-white shadow-[0_0_6px_var(--glow-color)]';
 		switch((strain.type||'').toLowerCase()){
 			case 'sativa':
-				return { badge: `${base} bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 [${glow}:rgba(249,115,22,0.55)]`, ring: 'ring-amber-400/40', border: 'border-amber-400/25 hover:border-amber-300/40', pulse: 'after:from-orange-500/40' };
+				return {
+					badge: `${base} bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 [${glow}:rgba(249,115,22,0.65)]`,
+					ring: 'ring-amber-400/70',
+					border: 'border-amber-400/25 hover:border-amber-300/40',
+					pulse: 'after:from-orange-500/40',
+					glowVar: `[${glow}:rgba(249,115,22,0.65)]`
+				};
 			case 'indica':
-				return { badge: `${base} bg-gradient-to-r from-indigo-700 via-purple-700 to-fuchsia-600 [${glow}:rgba(167,139,250,0.5)]`, ring: 'ring-purple-400/40', border: 'border-purple-400/25 hover:border-purple-300/40', pulse: 'after:from-purple-500/40' };
+				return {
+					badge: `${base} bg-gradient-to-r from-indigo-700 via-purple-700 to-fuchsia-600 [${glow}:rgba(167,139,250,0.6)]`,
+					ring: 'ring-purple-400/70',
+					border: 'border-purple-400/25 hover:border-purple-300/40',
+					pulse: 'after:from-purple-500/40',
+					glowVar: `[${glow}:rgba(167,139,250,0.6)]`
+				};
 			case 'hybrid':
 			default:
-				return { badge: `${base} bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500 [${glow}:rgba(16,185,129,0.55)]`, ring: 'ring-emerald-400/40', border: 'border-emerald-400/25 hover:border-emerald-300/40', pulse: 'after:from-emerald-400/40' };
+				return {
+					badge: `${base} bg-gradient-to-r from-emerald-500 via-teal-500 to-sky-500 [${glow}:rgba(16,185,129,0.65)]`,
+					ring: 'ring-emerald-400/70',
+					border: 'border-emerald-400/25 hover:border-emerald-300/40',
+					pulse: 'after:from-emerald-400/40',
+					glowVar: `[${glow}:rgba(16,185,129,0.65)]`
+				};
 		}
 	})();
 
@@ -129,6 +152,7 @@ export default function StrainCard({ strain, onToggleFavorite, onFilterType, isT
 		if (clicked) return;
 		setClicked(true);
 		setTimeout(()=> setClicked(false), 600);
+		if (onSelect) onSelect(strain);
 	}
 
 	useEffect(()=>{
@@ -156,8 +180,33 @@ export default function StrainCard({ strain, onToggleFavorite, onFilterType, isT
 		};
 	},[reduceMotion]);
 
+	// Start pulsing when this card becomes active, stop after a short time
+	useEffect(() => {
+		if (reduceMotion) {
+			setPulsing(false);
+			if (pulseTimerRef.current) { clearTimeout(pulseTimerRef.current); pulseTimerRef.current = null; }
+			return;
+		}
+		if (active) {
+			setPulsing(true);
+			if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
+			pulseTimerRef.current = setTimeout(() => { setPulsing(false); }, 2600);
+		} else {
+			setPulsing(false);
+			if (pulseTimerRef.current) { clearTimeout(pulseTimerRef.current); pulseTimerRef.current = null; }
+		}
+		return () => { if (pulseTimerRef.current) { clearTimeout(pulseTimerRef.current); pulseTimerRef.current = null; } };
+	}, [active, reduceMotion]);
+
+	// expose ref to parent for landing animation targeting
+	useEffect(()=>{
+		if (!registerRef) return;
+		registerRef(strain.id, cardRef.current);
+		return () => { registerRef(strain.id, null); };
+	}, [registerRef, strain.id]);
+
 	return (
-			<div ref={cardRef} onClick={handleCardClick} className={`relative overflow-hidden bg-gradient-to-b from-black/60 to-black/30 p-4 rounded-xl shadow-lg text-gray-100 w-full border ${typeTheme.border} will-change-transform transition-all duration-300 flex flex-col ${animating ? `scale-105 ring-2 ${typeTheme.ring} shadow-2xl` : 'hover:shadow-xl'} ${clicked ? 'scale-[1.015]' : ''}`}>
+			<div ref={cardRef} onClick={handleCardClick} className={`relative overflow-hidden bg-gradient-to-b from-black/60 to-black/30 p-4 rounded-xl shadow-lg text-gray-100 w-full border ${typeTheme.border} will-change-transform transition-all duration-300 flex flex-col ${typeTheme.glowVar} ${animating ? `scale-105 ring-3 ${typeTheme.ring} shadow-2xl` : 'hover:shadow-xl'} ${active ? `ring-4 ${typeTheme.ring} shadow-[0_0_42px_14px_var(--glow-color)] drop-shadow-[0_0_10px_var(--glow-color)] ${pulsing ? 'animate-[pulse_1.6s_ease-in-out]' : ''}` : ''} ${clicked ? 'scale-[1.015]' : ''} ${cardClass}`}>
 				{/* radial burst effect */}
 				{clicked && !reduceMotion && (
 					<span aria-hidden='true' className={`pointer-events-none absolute inset-0 after:content-[''] after:absolute after:inset-0 after:bg-radial-gradient after:to-transparent ${typeTheme.pulse} after:via-transparent after:opacity-70 after:rounded-xl animate-ping`} />
@@ -192,7 +241,7 @@ export default function StrainCard({ strain, onToggleFavorite, onFilterType, isT
 
 				<div className='text-right flex flex-col items-end gap-2'>
 					<button
-						title={`Toggle filter for ${strain.type}`}
+						title={`Toggle filter for ${strain.type} (Shortcut: ${ (strain.type||'')[0] ? (strain.type[0].toUpperCase()) : '' })`}
 						onClick={(e)=>{ e.stopPropagation(); onFilterType && onFilterType(strain.type); }}
 						className={`text-[11px] px-2.5 py-1 rounded-full font-semibold tracking-wide inline-block transition ${typeTheme.badge} relative ${isTypeActive ? 'ring-2 ring-white/60 scale-105' : 'hover:brightness-110'} focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60`}
 						aria-pressed={isTypeActive}
@@ -259,3 +308,20 @@ export default function StrainCard({ strain, onToggleFavorite, onFilterType, isT
 		</div>
 	);
 }
+
+// Custom comparison to reduce re-renders. Re-render only if:
+// - favorite toggled
+// - type changed
+// - id changed (new item)
+// - isTypeActive changed
+// - cardClass changes (animation state)
+export default memo(StrainCard, (prev, next) => {
+	return (
+		prev.strain.id === next.strain.id &&
+		prev.strain.favorite === next.strain.favorite &&
+		prev.strain.type === next.strain.type &&
+		prev.isTypeActive === next.isTypeActive &&
+		prev.cardClass === next.cardClass &&
+		prev.active === next.active
+	);
+});

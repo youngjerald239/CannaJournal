@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" aria-hidden="true">
+  <defs>
+    <linearGradient id="bee-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#065f46"/>
+    </linearGradient>
+  </defs>
+  <!-- wings -->
+  <ellipse cx="20" cy="22" rx="10" ry="6" fill="#e6fff6" stroke="#064e3b" stroke-width="1" opacity="0.9"/>
+  <ellipse cx="44" cy="22" rx="10" ry="6" fill="#e6fff6" stroke="#064e3b" stroke-width="1" opacity="0.9"/>
+  <!-- body -->
+  <ellipse cx="32" cy="36" rx="18" ry="12" fill="url(#bee-g)" stroke="#0b0f19" stroke-width="2"/>
+  <!-- stripes -->
+  <rect x="18" y="30" width="28" height="4" fill="#0b0f19" opacity="0.95"/>
+  <rect x="18" y="38" width="28" height="4" fill="#0b0f19" opacity="0.95"/>
+  <!-- head -->
+  <circle cx="18" cy="34" r="6" fill="#0b0f19"/>
+  <circle cx="20.2" cy="33.5" r="1.4" fill="#e2fdf4"/>
+  <!-- stinger -->
+  <path d="M50 36l8 4-8 4" fill="#0b0f19"/>
+  <!-- antennae -->
+  <path d="M14 29c-2-4-6-5-8-4" stroke="#0b0f19" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M20 29c0-4 4-5 6-4" stroke="#0b0f19" stroke-width="2" fill="none" stroke-linecap="round"/>
+</svg>

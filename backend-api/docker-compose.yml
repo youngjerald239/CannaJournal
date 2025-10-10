@@ -1,0 +1,44 @@
+version: '3.9'
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: canna_journal_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cjuser
+      POSTGRES_PASSWORD: cjpass
+      POSTGRES_DB: cannajournal
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cjuser -d cannajournal"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  api:
+    build: .
+    container_name: canna_journal_api
+    restart: unless-stopped
+    environment:
+      # Update DATABASE_URL if you expose Postgres differently in prod
+      DATABASE_URL: postgres://cjuser:cjpass@db:5432/cannajournal
+      PORT: 5002
+      NODE_ENV: production
+      # Customize these securely in a .env file or compose overrides
+      JWT_SECRET: change-me
+      ADMIN_USER: admin
+      ADMIN_PASS: adminpass
+      # Allow frontend origins (comma separated). For local dev:
+      ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+    ports:
+      - "5002:5002"
+    volumes:
+      - uploads:/usr/src/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  pgdata: {}
+  uploads: {}

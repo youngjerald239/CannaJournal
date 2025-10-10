@@ -7,6 +7,9 @@ import Profile from './pages/Profile';
 import Journal from './pages/Journal';
 import Strains from './pages/Strains';
 import Admin from './pages/Admin';
+import Chat from './pages/Chat';
+import Feed from './pages/Feed';
+import Guides from './pages/Guides';
 import './App.css';
 import { AuthProvider } from './lib/auth';
 import { useAuth } from './lib/auth';
@@ -30,6 +33,9 @@ return (
 <Route path='/journal' element={<RequireAuth><Journal /></RequireAuth>} />
 <Route path='/strains' element={<Strains />} />
 				<Route path='/admin' element={<RequireAuth><Admin /></RequireAuth>} />
+				<Route path='/chat' element={<RequireAuth><Chat /></RequireAuth>} />
+				<Route path='/feed' element={<Feed />} />
+				<Route path='/guides' element={<Guides />} />
 </Routes>
 </AuthProvider>
 </Router>

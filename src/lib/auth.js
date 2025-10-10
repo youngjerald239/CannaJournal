@@ -4,6 +4,7 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [user, setUser] = useState(null);
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
@@ -14,7 +15,10 @@ export function AuthProvider({ children }) {
         if (!mounted) return;
         if (res.ok) {
           const j = await res.json();
-          setIsAuthenticated(Boolean(j?.authenticated));
+            if (j?.authenticated){
+              setIsAuthenticated(true);
+              setUser(j.user);
+            } else { setIsAuthenticated(false); setUser(null); }
         } else setIsAuthenticated(false);
       } catch (err) {
         setIsAuthenticated(false);
@@ -26,19 +30,22 @@ export function AuthProvider({ children }) {
   }, []);
 
   async function loginWithPassword(username, password) {
+    // username can be either actual username or email identifier; server handles both and admin short-circuit
     const res = await fetch('/auth', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
     if (!res.ok) throw new Error('Login failed');
     const j = await res.json();
     // server returns token, but we store cookie so just mark authenticated
-    setIsAuthenticated(true);
+  setIsAuthenticated(true);
+  if (j.user) setUser(j.user);
     return j;
   }
 
-  async function signupWithPassword(username, password) {
-    const res = await fetch('/auth/signup', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+  async function signupWithPassword({ username, email, password }) {
+    const res = await fetch('/auth/signup', { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, email, password }) });
     if (!res.ok) throw new Error('Signup failed');
     const j = await res.json();
-    setIsAuthenticated(true);
+  setIsAuthenticated(true);
+  if (j.user) setUser(j.user);
     return j;
   }
 
@@ -48,10 +55,11 @@ export function AuthProvider({ children }) {
     } catch (e) {
       // ignore
     }
-    setIsAuthenticated(false);
+  setIsAuthenticated(false);
+  setUser(null);
   }
 
-  const value = { isAuthenticated, checking, loginWithPassword, signupWithPassword, logout };
+  const value = { isAuthenticated, checking, user, loginWithPassword, signupWithPassword, logout };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

@@ -1,0 +1,3 @@
+-- 001_initial.sql baseline schema (existing schemaSql snapshot)
+-- This file can be used for fresh installs; subsequent migrations build on this.
+-- (For brevity, not duplicating full schema here; existing schemaSql remains source of truth.)

@@ -1,0 +1,11 @@
+services:
+  api:
+    environment:
+      # Set to your public site origin (comma-separate multiple)
+      # Example: https://journal.example.com
+      ALLOWED_ORIGINS: https://your-domain
+
+  web:
+    # Expose on standard HTTP port in production
+    ports:
+      - "80:80"

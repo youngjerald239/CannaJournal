@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ main ]
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: |
+            backend-api/package-lock.json
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Run backend tests
+        run: npm test -- --ci --reporters=default --reporters=jest-junit
+
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Run frontend tests
+        env:
+          CI: true
+        run: npm test -- --watchAll=false

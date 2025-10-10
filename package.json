@@ -11,13 +11,18 @@
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.3",
     "react-scripts": "5.0.1",
+    "react-window": "^1.8.10",
+    "socket.io-client": "^4.8.1",
     "web-vitals": "^2.1.4"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "backend": "cd backend-api && node server.js",
+    "dev": "concurrently -k -n BACKEND,FRONTEND -c green,cyan \"npm:backend\" \"react-scripts start\"",
+  "icons": "node scripts/gen-icons.js"
   },
   "eslintConfig": {
     "extends": [
@@ -40,8 +45,11 @@
   "devDependencies": {
     "@tailwindcss/cli": "^4.1.14",
     "autoprefixer": "^10.4.21",
+    "concurrently": "^9.0.1",
     "postcss": "^8.5.6",
-    "tailwindcss": "^3.4.18"
+    "tailwindcss": "^3.4.18",
+    "sharp": "^0.33.5",
+    "png-to-ico": "^2.1.8"
   },
   "proxy": "http://localhost:5002"
 }

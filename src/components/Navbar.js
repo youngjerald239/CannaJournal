@@ -42,7 +42,8 @@ export default function Navbar() {
 		let cancelled = false;
 		(async ()=>{
 			try {
-				const res = await fetch('http://localhost:5002/strains');
+				// Same-origin so it works behind Nginx proxy and CRA dev proxy
+				const res = await fetch('/strains');
 				if (!res.ok) throw new Error('fail');
 				const data = await res.json();
 				if (!cancelled && Array.isArray(data)) setSearchData(data);
@@ -134,7 +135,7 @@ export default function Navbar() {
 			<div className='max-w-6xl mx-auto px-4 h-14 flex items-center gap-4'>
 				<Link to='/' className='flex items-center gap-2 group focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 rounded-md'>
 					<LogoLeaf />
-					<span className='font-semibold tracking-wide text-sm sm:text-base bg-gradient-to-r from-emerald-300 via-green-200 to-teal-200 bg-clip-text text-transparent'>CannaJournal</span>
+					<span className='font-semibold tracking-wide text-sm sm:text-base bg-gradient-to-r from-emerald-300 via-green-200 to-teal-200 bg-clip-text text-transparent'>canna-bee</span>
 				</Link>
 
 				{/* Primary nav (desktop) */}
@@ -143,6 +144,9 @@ export default function Navbar() {
 					<NavLink to='/strains' label='Strains' active={location.pathname.startsWith('/strains')} />
 					<NavLink to='/journal' label='Journal' active={location.pathname.startsWith('/journal')} />
 					<NavLink to='/profile' label='Profile' active={location.pathname.startsWith('/profile')} />
+					<NavLink to='/feed' label='Feed' active={location.pathname.startsWith('/feed')} />
+					<NavLink to='/guides' label='Guides' active={location.pathname.startsWith('/guides')} />
+					<NavLink to='/chat' label='Chat' active={location.pathname.startsWith('/chat')} />
 				</div>
 
 				{/* Global search */}
@@ -230,9 +234,9 @@ export default function Navbar() {
 }
 
 function AuthStatus({ open, menuId, currentPath, onNavigate }) {
-	const { isAuthenticated, logout } = useAuth();
-	const avatar = null; // placeholder
-	const initial = 'U';
+	const { isAuthenticated, logout, user } = useAuth();
+	const avatarMeta = user?.avatar;
+	const initials = avatarMeta?.text || (user?.username? user.username.slice(0,2).toUpperCase(): 'U');
 
 	return (
 		<div id={menuId} className={`md:static absolute left-0 right-0 top-full md:top-auto ${open ? 'block' : 'hidden'} md:block bg-slate-950/90 md:bg-transparent px-4 md:px-0 pb-4 md:pb-0 pt-4 md:pt-0 border-b md:border-0 border-emerald-400/10 md:shadow-none shadow-lg md:rounded-none rounded-b-xl`}> 
@@ -243,6 +247,9 @@ function AuthStatus({ open, menuId, currentPath, onNavigate }) {
 					<NavLink mobile to='/strains' label='Strains' active={currentPath.startsWith('/strains')} onClick={onNavigate} />
 					<NavLink mobile to='/journal' label='Journal' active={currentPath.startsWith('/journal')} onClick={onNavigate} />
 					<NavLink mobile to='/profile' label='Profile' active={currentPath.startsWith('/profile')} onClick={onNavigate} />
+					<NavLink mobile to='/feed' label='Feed' active={currentPath.startsWith('/feed')} onClick={onNavigate} />
+					<NavLink mobile to='/guides' label='Guides' active={currentPath.startsWith('/guides')} onClick={onNavigate} />
+					<NavLink mobile to='/chat' label='Chat' active={currentPath.startsWith('/chat')} onClick={onNavigate} />
 					{isAuthenticated && <NavLink mobile to='/admin' label='Admin' active={currentPath.startsWith('/admin')} onClick={onNavigate} />}
 				</div>
 				{/* Auth controls */}
@@ -250,10 +257,10 @@ function AuthStatus({ open, menuId, currentPath, onNavigate }) {
 					{isAuthenticated ? (
 						<>
 							<Link to='/profile' onClick={onNavigate} className='group inline-flex items-center gap-2 pl-0 md:pl-2 pr-3 py-1.5 rounded-full bg-emerald-800/20 hover:bg-emerald-700/30 border border-emerald-400/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60 transition'>
-								<span className='w-7 h-7 rounded-full ring-1 ring-emerald-400/40 bg-gradient-to-br from-emerald-700 to-emerald-900 flex items-center justify-center text-[11px] font-semibold text-emerald-100'>
-									{avatar ? <img src={avatar} alt='Avatar' className='w-full h-full object-cover rounded-full'/> : initial}
+								<span className='w-7 h-7 rounded-full ring-1 ring-emerald-400/40 flex items-center justify-center text-[11px] font-semibold text-emerald-100' style={{ background: avatarMeta?.color || 'linear-gradient(to bottom right,#065f46,#022c22)' }}>
+									{initials}
 								</span>
-								<span className='text-[11px] uppercase tracking-wide text-emerald-200 hidden sm:inline'>You</span>
+								<span className='text-[11px] uppercase tracking-wide text-emerald-200 hidden sm:inline'>{user?.displayName || 'You'}</span>
 							</Link>
 							<button onClick={() => { logout(); onNavigate && onNavigate(); }} className='px-3 py-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-200 text-xs font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50 transition'>Logout</button>
 						</>
@@ -287,9 +294,30 @@ function NavLink({ to, label, active, onClick, mobile=false, variant }) {
 
 function LogoLeaf(){
   return (
-    <svg className='w-6 h-6 text-emerald-300 drop-shadow-[0_0_4px_rgba(16,185,129,0.6)] transition-transform group-hover:rotate-6' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' strokeLinejoin='round' aria-hidden='true'>
-      <path d='M12 2c4.5 4 7 8 7 11.5A6.5 6.5 0 0 1 12.5 20h-1A6.5 6.5 0 0 1 5 13.5C5 10 7.5 6 12 2Z' />
-      <path d='M12 2v18' />
-    </svg>
+		<svg className='w-6 h-6 text-emerald-300 drop-shadow-[0_0_4px_rgba(16,185,129,0.6)] transition-transform group-hover:rotate-6' viewBox='0 0 24 24' aria-hidden='true'>
+			{/* canna-bee icon: small green/black bumble bee */}
+			<defs>
+				<linearGradient id='bee-g' x1='0' y1='0' x2='1' y2='1'>
+					<stop offset='0%' stopColor='#10b981' />
+					<stop offset='100%' stopColor='#065f46' />
+				</linearGradient>
+			</defs>
+			{/* wings */}
+			<ellipse cx='8' cy='7.5' rx='4.6' ry='2.8' fill='#e6fff6' stroke='#064e3b' strokeWidth='0.8' opacity='0.9' />
+			<ellipse cx='16' cy='7.5' rx='4.6' ry='2.8' fill='#e6fff6' stroke='#064e3b' strokeWidth='0.8' opacity='0.9' />
+			{/* body */}
+			<ellipse cx='12' cy='13' rx='7.5' ry='5.2' fill='url(#bee-g)' stroke='#0b0f19' strokeWidth='1.2' />
+			{/* stripes */}
+			<rect x='6.2' y='10.7' width='11.6' height='1.6' fill='#0b0f19' opacity='0.95' />
+			<rect x='6.2' y='13.7' width='11.6' height='1.6' fill='#0b0f19' opacity='0.95' />
+			{/* head */}
+			<circle cx='6.5' cy='12.3' r='2.6' fill='#0b0f19' />
+			<circle cx='7.4' cy='11.9' r='0.6' fill='#e2fdf4' />
+			{/* stinger */}
+			<path d='M18.8 13l3 1.6-3 1.6' fill='#0b0f19' />
+			{/* antennae */}
+			<path d='M5.2 10.2c-.9-1.7-2.7-2.1-3.6-1.7' stroke='#0b0f19' strokeWidth='1' fill='none' strokeLinecap='round' />
+			<path d='M7.6 10.2c.1-1.7 1.7-2.1 2.7-1.7' stroke='#0b0f19' strokeWidth='1' fill='none' strokeLinecap='round' />
+		</svg>
   );
 }
