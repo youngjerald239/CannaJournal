@@ -22,7 +22,8 @@
     "eject": "react-scripts eject",
     "backend": "cd backend-api && node server.js",
     "dev": "concurrently -k -n BACKEND,FRONTEND -c green,cyan \"npm:backend\" \"react-scripts start\"",
-  "icons": "node scripts/gen-icons.js"
+    "icons": "node scripts/gen-icons.js",
+    "smoke": "node scripts/smoke-test.js"
   },
   "eslintConfig": {
     "extends": [

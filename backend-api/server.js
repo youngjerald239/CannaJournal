@@ -183,10 +183,29 @@ function verifyJWT(token, secret){
   } catch(_) { return null; }
 }
 function setSessionCookie(res, token, maxAgeSeconds){
-  res.setHeader('Set-Cookie', cookie.serialize('session', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: maxAgeSeconds }));
+  const isProd = process.env.NODE_ENV === 'production';
+  // In cross-origin deployments (Netlify frontend -> Render backend), cookies must be SameSite=None; Secure
+  const sameSite = isProd ? 'none' : 'lax';
+  const secure = isProd ? true : false;
+  res.setHeader('Set-Cookie', cookie.serialize('session', token, {
+    httpOnly: true,
+    sameSite,
+    secure,
+    path: '/',
+    maxAge: maxAgeSeconds
+  }));
 }
 function clearSessionCookie(res){
-  res.setHeader('Set-Cookie', cookie.serialize('session', '', { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 0 }));
+  const isProd = process.env.NODE_ENV === 'production';
+  const sameSite = isProd ? 'none' : 'lax';
+  const secure = isProd ? true : false;
+  res.setHeader('Set-Cookie', cookie.serialize('session', '', {
+    httpOnly: true,
+    sameSite,
+    secure,
+    path: '/',
+    maxAge: 0
+  }));
 }
 
 // OAuth routes removed; only local auth remains.
