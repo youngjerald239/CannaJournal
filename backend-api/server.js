@@ -345,17 +345,26 @@ function requireRole(role) {
 // Return current authenticated user metadata
 app.get('/auth/me', requireAuth, async (req, res) => {
   try {
+    const sessUser = { username: req.user.username, role: req.user.role || 'user' };
     if (pgEnabled && dal) {
-      const u = await dal.findUser(req.user.username);
-      if (!u) return res.status(404).json({ error: 'Not found' });
-      const avatar = generateAvatarMeta(u.username);
-      return res.json({ authenticated: true, user: { username: u.username, role: u.role, email: u.email || null, displayName: u.display_name || u.username, avatar } });
+      const u = await dal.findUser(sessUser.username);
+      if (u) {
+        const avatar = generateAvatarMeta(u.username);
+        return res.json({ authenticated: true, user: { username: u.username, role: u.role, email: u.email || null, displayName: u.display_name || u.username, avatar } });
+      }
+      // If user does not exist in DB (e.g., admin login without seed), return session-based identity
+      const avatar = generateAvatarMeta(sessUser.username);
+      return res.json({ authenticated: true, user: { username: sessUser.username, role: sessUser.role, email: null, displayName: sessUser.username, avatar } });
     }
     // JSON fallback
-    const u = users.find(x=> x.username === req.user.username);
-    if (!u) return res.status(404).json({ error: 'Not found' });
-    const avatar = generateAvatarMeta(u.username);
-    return res.json({ authenticated: true, user: { username: u.username, role: u.role || 'user', email: null, displayName: u.displayName || u.username, avatar } });
+    const u = users.find(x=> x.username === sessUser.username);
+    if (u) {
+      const avatar = generateAvatarMeta(u.username);
+      return res.json({ authenticated: true, user: { username: u.username, role: u.role || 'user', email: null, displayName: u.displayName || u.username, avatar } });
+    }
+    // If not found in JSON either, use session-based identity
+    const avatar = generateAvatarMeta(sessUser.username);
+    return res.json({ authenticated: true, user: { username: sessUser.username, role: sessUser.role, email: null, displayName: sessUser.username, avatar } });
   } catch (e) { return res.status(500).json({ error: 'Failed' }); }
 });
 
